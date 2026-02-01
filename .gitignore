@@ -1,0 +1,11 @@
+# Hidden files
+.*
+!.gitignore
+
+# Build folder
+/build
+/managed_components
+
+# Temporary files
+*.tmp
+*.bak
