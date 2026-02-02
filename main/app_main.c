@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -12,7 +13,23 @@
 #include "foc/esp_foc.h"
 #include "svpwm/esp_svpwm.h"
 
+#include "filesystem.h"
+#include "http-server.h"
+#include "wifi.h"
+#include ".wifi-secrets.h"
+
 static const char *TAG = "example_foc";
+
+
+// State
+volatile float rpm = 20.0;
+volatile float angle = 0.0;
+volatile bool motorEnable = true;
+
+// For a PID controller
+volatile float Kp = 0.0;
+volatile float Ki = 0.0;
+volatile float Kd = 0.0;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
@@ -30,8 +47,9 @@ static const char *TAG = "example_foc";
 #define EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
 #define EXAMPLE_FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
 
-#define EXAMPLE_FOC_WAVE_FREQ    5         // 50Hz 3 phase AC wave
-#define EXAMPLE_FOC_WAVE_AMPL    100        // Wave amplitude, Use up-down timer mode, max value should be (EXAMPLE_FOC_MCPWM_PERIOD/2)
+float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
+#define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (EXAMPLE_FOC_MCPWM_PERIOD/2)
+#define POLE_PAIRS 7
 
 void bsp_bridge_driver_init(void)
 {
@@ -58,6 +76,22 @@ bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello FOC");
+
+    esp_err_t ret = start_filesystem();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start filesystem: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "Files in root directory:");
+    list_files("/fs");
+    ESP_LOGI(TAG, "Files in /fs/www directory:");
+    list_files("/fs/www");
+
+    wifi_init();
+    wifi_scan_and_print();
+    ESP_LOGI(TAG, "Connecting to WiFi...");
+    wifi_connect(AP_NAME, AP_PASSWORD);
+
     // counting semaphore used to sync update foc calculation when mcpwm timer updated
     SemaphoreHandle_t update_semaphore = xSemaphoreCreateCounting(1, 0);
 
@@ -114,10 +148,18 @@ void app_main(void)
     while (true) {
         xSemaphoreTake(update_semaphore, portMAX_DELAY);
 
+        // electrical Hz is foc_wave_freq
+        // float mechanical_Hz = electrical_Hz / POLE_PAIRS;
+        // float mechanical_RPM = (60 × electrical_Hz) / POLE_PAIRS;
+
+        foc_wave_freq = rpm * POLE_PAIRS / 60.0;
+
         // Calculate elec_theta_deg increase step of 50Hz output on 10000Hz call
-        elec_theta_deg += (EXAMPLE_FOC_WAVE_FREQ * 360.f) / (EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ / EXAMPLE_FOC_MCPWM_PERIOD);
+        elec_theta_deg += (foc_wave_freq * 360.f) / (EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ / EXAMPLE_FOC_MCPWM_PERIOD);
         if (elec_theta_deg > 360) {
             elec_theta_deg -= 360;
+        } else if (elec_theta_deg < 0) {
+            elec_theta_deg += 360;
         }
         elec_theta_rad = _IQmpy(_IQ(elec_theta_deg), _IQ(M_PI / 180.f));
 

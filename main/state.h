@@ -1,0 +1,10 @@
+#include <stdint.h>
+#include  <stdbool.h>
+
+extern volatile float rpm;
+extern volatile float angle;
+extern volatile bool motorEnable;
+// For a PID controller
+extern volatile float Kp;
+extern volatile float Ki;
+extern volatile float Kd;
