@@ -17,6 +17,8 @@
 #include "http-server.h"
 #include "wifi.h"
 #include ".wifi-secrets.h"
+#include "as5600.h"
+
 
 static const char *TAG = "example_foc";
 
@@ -37,18 +39,39 @@ volatile float Kd = 0.0;
 #define EXAMPLE_FOC_DRV_EN_GPIO          10
 #define EXAMPLE_FOC_DRV_FAULT_GPIO       11
 
+#ifdef MINI_S3
+// Mini ESP32-S3 board used these
 #define EXAMPLE_FOC_PWM_UH_GPIO          4
 #define EXAMPLE_FOC_PWM_UL_GPIO          5
 #define EXAMPLE_FOC_PWM_VH_GPIO          6
 #define EXAMPLE_FOC_PWM_VL_GPIO          7
 #define EXAMPLE_FOC_PWM_WH_GPIO          8
 #define EXAMPLE_FOC_PWM_WL_GPIO          9
+#else
+// Larger EWSP32-S3 WROOM board uses these
+#define EXAMPLE_FOC_PWM_UH_GPIO          4
+#define EXAMPLE_FOC_PWM_UL_GPIO          5
+#define EXAMPLE_FOC_PWM_VH_GPIO          15
+#define EXAMPLE_FOC_PWM_VL_GPIO          16
+#define EXAMPLE_FOC_PWM_WH_GPIO          17
+#define EXAMPLE_FOC_PWM_WL_GPIO          18
 
-#define EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
-#define EXAMPLE_FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
+// seond controller
+#define BASE_FOC_PWM2_UH_GPIO
+#define BASE_FOC_PWM2_UL_GPIO
+#define BASE_FOC_PWM2_VH_GPIO
+#define BASE_FOC_PWM2_VL_GPIO
+#define BASE_FOC_PWM2_UH_GPIO
+#define BASE_FOC_PWM2_WH_GPIO
+#define BASE_FOC_PWM2_WL_GPIO
+
+#endif
+
+#define FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
+#define FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
 
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
-#define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (EXAMPLE_FOC_MCPWM_PERIOD/2)
+#define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
 #define POLE_PAIRS 7
 
 void bsp_bridge_driver_init(void)
@@ -73,6 +96,33 @@ bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data
     return task_yield;
 }
 
+inverter_handle_t inverter1;
+foc_dq_coord_t dq_out = {_IQ(0), _IQ(0)};
+
+void foc_set_angle(float elec_theta_deg) {
+	foc_ab_coord_t ab_out;
+    foc_uvw_coord_t uvw_out;
+	int uvw_duty[3];
+	_iq elec_theta_rad = _IQmpy(_IQ(elec_theta_deg), _IQ(M_PI / 180.f));
+    // In FOC motor control, we usually set Vd for alignment or weak-meg control, and set Vq for torque control.
+    // As here is open loop output, use Vd is enough, and coord aligned
+    dq_out.d = _IQ(EXAMPLE_FOC_WAVE_AMPL);
+    foc_inverse_park_transform(elec_theta_rad, &dq_out, &ab_out);
+
+    #if CONFIG_ESP_FOC_USE_SVPWM
+        foc_svpwm_duty_calculate(&ab_out, &uvw_out);
+    #else   // Use spwm (sin pwm) instead. (see menuconfig help to know difference between SVPWM and SPWM)
+        foc_inverse_clarke_transform(&ab_out, &uvw_out);
+    #endif
+    // Regular uvw data to (0 ~ (FOC_MCPWM_PERIOD/2))
+    uvw_duty[0] = _IQtoF(_IQdiv2(uvw_out.u)) + (FOC_MCPWM_PERIOD / 4);
+    uvw_duty[1] = _IQtoF(_IQdiv2(uvw_out.v)) + (FOC_MCPWM_PERIOD / 4);
+    uvw_duty[2] = _IQtoF(_IQdiv2(uvw_out.w)) + (FOC_MCPWM_PERIOD / 4);
+
+    // output pwm duty
+    ESP_ERROR_CHECK(svpwm_inverter_set_duty(inverter1, uvw_duty[0], uvw_duty[1], uvw_duty[2]));
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello FOC");
@@ -95,20 +145,15 @@ void app_main(void)
     // counting semaphore used to sync update foc calculation when mcpwm timer updated
     SemaphoreHandle_t update_semaphore = xSemaphoreCreateCounting(1, 0);
 
-    foc_dq_coord_t dq_out = {_IQ(0), _IQ(0)};
-    foc_ab_coord_t ab_out;
-    foc_uvw_coord_t uvw_out;
-    int uvw_duty[3];
     float elec_theta_deg = 0;
-    _iq elec_theta_rad;
 
     inverter_config_t cfg = {
         .timer_config = {
             .group_id = 0,
             .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
-            .resolution_hz = EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ,
+            .resolution_hz = FOC_MCPWM_TIMER_RESOLUTION_HZ,
             .count_mode = MCPWM_TIMER_COUNT_MODE_UP_DOWN,   //UP_DOWN mode will generate center align pwm wave, which can reduce MOSFET switch times on same effect, extend life
-            .period_ticks = EXAMPLE_FOC_MCPWM_PERIOD,
+            .period_ticks = FOC_MCPWM_PERIOD,
         },
         .operator_config = {
             .group_id = 0,
@@ -129,7 +174,6 @@ void app_main(void)
             .flags.invert_output = true,
         },
     };
-    inverter_handle_t inverter1;
     ESP_ERROR_CHECK(svpwm_new_inverter(&cfg, &inverter1));
     ESP_LOGI(TAG, "Inverter init OK");
 
@@ -144,6 +188,25 @@ void app_main(void)
     bsp_bridge_driver_init();
     bsp_bridge_driver_enable(true);
 
+    // align sensor
+    as5600_init();
+    float mech_deg = as5600_get_mech_deg();
+    ESP_LOGI(TAG, "Mechanical angle: %.2f deg", mech_deg);
+
+    // force 0 degree electrical angle
+    // after inverter enable
+    float align_angle = 0.0f;
+    for (int i = 0; i < 500; i++) {
+        foc_set_angle(align_angle);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    float mech_zero = as5600_get_mech_deg();
+    ESP_LOGI(TAG, "Mech. zero: %.2f deg", mech_zero);
+
+    float torque_offset = 10.0f;
+    ESP_LOGI(TAG, "Torque offset: %.2f deg", torque_offset);
+
     ESP_LOGI(TAG, "Start FOC");
     while (true) {
         xSemaphoreTake(update_semaphore, portMAX_DELAY);
@@ -152,34 +215,24 @@ void app_main(void)
         // float mechanical_Hz = electrical_Hz / POLE_PAIRS;
         // float mechanical_RPM = (60 × electrical_Hz) / POLE_PAIRS;
 
+#if false
+        // this is simple open-loop calculation
         foc_wave_freq = rpm * POLE_PAIRS / 60.0;
-
         // Calculate elec_theta_deg increase step of 50Hz output on 10000Hz call
-        elec_theta_deg += (foc_wave_freq * 360.f) / (EXAMPLE_FOC_MCPWM_TIMER_RESOLUTION_HZ / EXAMPLE_FOC_MCPWM_PERIOD);
+        elec_theta_deg += (foc_wave_freq * 360.f) / (FOC_MCPWM_TIMER_RESOLUTION_HZ / FOC_MCPWM_PERIOD);
+#else
+        // this is closed-loop calculation using encoder feedback
+        float mech_deg = as5600_get_mech_deg() - mech_zero;
+        float rotor_elec = mech_deg * POLE_PAIRS;
+        elec_theta_deg = rotor_elec + torque_offset;
+#endif
         if (elec_theta_deg > 360) {
             elec_theta_deg -= 360;
         } else if (elec_theta_deg < 0) {
             elec_theta_deg += 360;
         }
-        elec_theta_rad = _IQmpy(_IQ(elec_theta_deg), _IQ(M_PI / 180.f));
 
-        // In FOC motor control, we usually set Vd for alignment or weak-meg control, and set Vq for torque control.
-        // As here is open loop output, use Vd is enough, and coord aligned
-        dq_out.d = _IQ(EXAMPLE_FOC_WAVE_AMPL);
-        foc_inverse_park_transform(elec_theta_rad, &dq_out, &ab_out);
-
-#if CONFIG_ESP_FOC_USE_SVPWM
-        foc_svpwm_duty_calculate(&ab_out, &uvw_out);
-#else   // Use spwm (sin pwm) instead. (see menuconfig help to know difference between SVPWM and SPWM)
-        foc_inverse_clarke_transform(&ab_out, &uvw_out);
-#endif
-        // Regular uvw data to (0 ~ (EXAMPLE_FOC_MCPWM_PERIOD/2))
-        uvw_duty[0] = _IQtoF(_IQdiv2(uvw_out.u)) + (EXAMPLE_FOC_MCPWM_PERIOD / 4);
-        uvw_duty[1] = _IQtoF(_IQdiv2(uvw_out.v)) + (EXAMPLE_FOC_MCPWM_PERIOD / 4);
-        uvw_duty[2] = _IQtoF(_IQdiv2(uvw_out.w)) + (EXAMPLE_FOC_MCPWM_PERIOD / 4);
-
-        // output pwm duty
-        ESP_ERROR_CHECK(svpwm_inverter_set_duty(inverter1, uvw_duty[0], uvw_duty[1], uvw_duty[2]));
+        foc_set_angle(elec_theta_deg);
     }
 
     bsp_bridge_driver_enable(false);
