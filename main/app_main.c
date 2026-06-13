@@ -36,34 +36,40 @@ volatile float Kd = 0.0;
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
-#define EXAMPLE_FOC_DRV_EN_GPIO          10
-#define EXAMPLE_FOC_DRV_FAULT_GPIO       11
 
 #ifdef MINI_S3
+#pragma message("Configured for MINI_S3 board")
 // Mini ESP32-S3 board used these
-#define EXAMPLE_FOC_PWM_UH_GPIO          4
-#define EXAMPLE_FOC_PWM_UL_GPIO          5
-#define EXAMPLE_FOC_PWM_VH_GPIO          6
-#define EXAMPLE_FOC_PWM_VL_GPIO          7
-#define EXAMPLE_FOC_PWM_WH_GPIO          8
-#define EXAMPLE_FOC_PWM_WL_GPIO          9
+#define FOC_DRV1_EN_GPIO         10
+#define FOC_DRV1_FAULT_GPIO      11
+#define PITCH_FOC_PWM1_UH_GPIO          4
+#define PITCH_FOC_PWM1_UL_GPIO          5
+#define PITCH_FOC_PWM1_VH_GPIO          6
+#define PITCH_FOC_PWM1_VL_GPIO          7
+#define PITCH_FOC_PWM1_WH_GPIO          8
+#define PITCH_FOC_PWM1_WL_GPIO          9
 #else
+#pragma message("Configured for ESP32 WROOM board")
 // Larger EWSP32-S3 WROOM board uses these
-#define EXAMPLE_FOC_PWM_UH_GPIO          4
-#define EXAMPLE_FOC_PWM_UL_GPIO          5
-#define EXAMPLE_FOC_PWM_VH_GPIO          15
-#define EXAMPLE_FOC_PWM_VL_GPIO          16
-#define EXAMPLE_FOC_PWM_WH_GPIO          17
-#define EXAMPLE_FOC_PWM_WL_GPIO          18
+// first controller
+#define FOC_DRV1_EN_GPIO          2
+#define FOC_DRV1_FAULT_GPIO       34
+#define PITCH_FOC_PWM1_UH_GPIO          4
+#define PITCH_FOC_PWM1_UL_GPIO          5
+#define PITCH_FOC_PWM1_VH_GPIO          12
+#define PITCH_FOC_PWM1_VL_GPIO          13
+#define PITCH_FOC_PWM1_WH_GPIO          14
+#define PITCH_FOC_PWM1_WL_GPIO          15
 
-// seond controller
-#define BASE_FOC_PWM2_UH_GPIO
-#define BASE_FOC_PWM2_UL_GPIO
-#define BASE_FOC_PWM2_VH_GPIO
-#define BASE_FOC_PWM2_VL_GPIO
-#define BASE_FOC_PWM2_UH_GPIO
-#define BASE_FOC_PWM2_WH_GPIO
-#define BASE_FOC_PWM2_WL_GPIO
+// second controller
+#define FOC_DRV2_EN_GPIO          27
+#define FOC_DRV2_FAULT_GPIO       35
+#define YAW_FOC_PWM2_UH_GPIO       16
+#define YAW_FOC_PWM2_UL_GPIO       17
+#define YAW_FOC_PWM2_VH_GPIO       18
+#define YAW_FOC_PWM2_VL_GPIO       19
+#define YAW_FOC_PWM2_WH_GPIO       25
+#define YAW_FOC_PWM2_WL_GPIO       26
 
 #endif
 
@@ -78,7 +84,7 @@ void bsp_bridge_driver_init(void)
 {
     gpio_config_t drv_en_config = {
         .mode = GPIO_MODE_OUTPUT,
-        .pin_bit_mask = 1ULL << EXAMPLE_FOC_DRV_EN_GPIO,
+        .pin_bit_mask = 1ULL << FOC_DRV1_EN_GPIO,
     };
     ESP_ERROR_CHECK(gpio_config(&drv_en_config));
 }
@@ -86,7 +92,7 @@ void bsp_bridge_driver_init(void)
 void bsp_bridge_driver_enable(bool enable)
 {
     ESP_LOGI(TAG, "%s MOSFET gate", enable ? "Enable" : "Disable");
-    gpio_set_level(EXAMPLE_FOC_DRV_EN_GPIO, enable);
+    gpio_set_level(FOC_DRV1_EN_GPIO, enable);
 }
 
 bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
@@ -162,9 +168,9 @@ void app_main(void)
             .flags.update_cmp_on_tez = true,
         },
         .gen_gpios = {
-            {EXAMPLE_FOC_PWM_UH_GPIO, EXAMPLE_FOC_PWM_UL_GPIO},
-            {EXAMPLE_FOC_PWM_VH_GPIO, EXAMPLE_FOC_PWM_VL_GPIO},
-            {EXAMPLE_FOC_PWM_WH_GPIO, EXAMPLE_FOC_PWM_WL_GPIO},
+            {PITCH_FOC_PWM1_UH_GPIO, PITCH_FOC_PWM1_UL_GPIO},
+            {PITCH_FOC_PWM1_VH_GPIO, PITCH_FOC_PWM1_VL_GPIO},
+            {PITCH_FOC_PWM1_WH_GPIO, PITCH_FOC_PWM1_WL_GPIO},
         },
         .dt_config = {
             .posedge_delay_ticks = 5,
@@ -189,8 +195,9 @@ void app_main(void)
     bsp_bridge_driver_enable(true);
 
     // align sensor
-    as5600_init();
-    float mech_deg = as5600_get_mech_deg();
+    as5600_init(0);
+    //as5600_init(1);// only one sensor for now
+    float mech_deg = as5600_get_mech_deg(0);
     ESP_LOGI(TAG, "Mechanical angle: %.2f deg", mech_deg);
 
     // force 0 degree electrical angle
@@ -201,7 +208,7 @@ void app_main(void)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    float mech_zero = as5600_get_mech_deg();
+    float mech_zero = as5600_get_mech_deg(0);
     ESP_LOGI(TAG, "Mech. zero: %.2f deg", mech_zero);
 
     float torque_offset = 10.0f;
@@ -215,14 +222,14 @@ void app_main(void)
         // float mechanical_Hz = electrical_Hz / POLE_PAIRS;
         // float mechanical_RPM = (60 × electrical_Hz) / POLE_PAIRS;
 
-#if false
+#if true
         // this is simple open-loop calculation
         foc_wave_freq = rpm * POLE_PAIRS / 60.0;
         // Calculate elec_theta_deg increase step of 50Hz output on 10000Hz call
         elec_theta_deg += (foc_wave_freq * 360.f) / (FOC_MCPWM_TIMER_RESOLUTION_HZ / FOC_MCPWM_PERIOD);
 #else
         // this is closed-loop calculation using encoder feedback
-        float mech_deg = as5600_get_mech_deg() - mech_zero;
+        float mech_deg = as5600_get_mech_deg(0) - mech_zero;
         float rotor_elec = mech_deg * POLE_PAIRS;
         elec_theta_deg = rotor_elec + torque_offset;
 #endif

@@ -10,6 +10,7 @@
 #include <math.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "http-server.h"
 #include "filesystem.h"
 #include "http_parser.h"
