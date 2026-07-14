@@ -14,6 +14,7 @@ const Ki_state = document.getElementById("KiState");
 const Kd_state = document.getElementById("KdState");
 const rpm_state = document.getElementById("rpmState");
 const angle_state = document.getElementById("angleState");
+const encoder_angle_state = document.getElementById("encoderAngleState");
 const motor_enable_state = document.getElementById("motorEnableState");
 async function fetchState() {
 	const resp = await fetch("/api/state");
@@ -41,11 +42,13 @@ function updateState(data) {
 	Kd_state.innerHTML = data.Kd;
 	rpm_state.innerHTML = data.rpm;
 	angle_state.innerHTML = data.angle;
+	encoder_angle_state.innerHTML = data.encoderAngle;
 	motor_enable_state.innerHTML = data.motorEnable ? "Enabled" : "Disabled";
 	// Don't fight the user while they're actively dragging the dial
 	if (!angleDialDragging) {
 		setDialAngle(data.angle, false);
 	}
+	setEncoderHandleAngle(data.encoderAngle);
 }
 
 async function updateValueOnServer(key, value) {
@@ -99,6 +102,8 @@ rpm_slider.oninput = updateFunction;
 const angleDial = document.getElementById("angleDial");
 const angleHandle = document.getElementById("angleHandle");
 const angleValueDisplay = document.getElementById("angleValue");
+const encoderHandle = document.getElementById("encoderHandle");
+const encoderAngleValueDisplay = document.getElementById("encoderAngleValue");
 
 // Distance (px) from dial center to handle center; keep the 28px handle inside the 180px dial.
 const DIAL_HANDLE_RADIUS = 65;
@@ -123,6 +128,18 @@ function setDialAngle(deg, sendUpdate) {
 	if (sendUpdate) {
 		processChange("angle", deg.toFixed(1));
 	}
+}
+
+// Positions the read-only encoder marker on the dial; never sends an update.
+function setEncoderHandleAngle(deg) {
+	deg = ((deg % 360) + 360) % 360;
+
+	const rad = (deg * Math.PI) / 180;
+	const x = Math.sin(rad) * DIAL_HANDLE_RADIUS;
+	const y = -Math.cos(rad) * DIAL_HANDLE_RADIUS;
+	encoderHandle.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+
+	encoderAngleValueDisplay.innerHTML = `${Math.round(deg)}&deg;`;
 }
 
 function angleFromPointerEvent(e) {

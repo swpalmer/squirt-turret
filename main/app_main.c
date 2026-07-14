@@ -26,6 +26,7 @@ static const char *TAG = "example_foc";
 // State
 volatile float rpm = 20.0;
 volatile float angle = 0.0;
+volatile float encoder_angle = 0.0;
 volatile bool motorEnable = true;
 
 // For a PID controller
@@ -207,14 +208,16 @@ void foc_task(void *arg)
         // float mechanical_Hz = electrical_Hz / POLE_PAIRS;
         // float mechanical_RPM = (60 × electrical_Hz) / POLE_PAIRS;
 
-#if true
+#if false
         // this is simple open-loop calculation
         foc_wave_freq = rpm * POLE_PAIRS / 60.0;
         // Calculate elec_theta_deg increase step of 50Hz output on 10000Hz call
         elec_theta_deg += (foc_wave_freq * 360.f) / (FOC_MCPWM_TIMER_RESOLUTION_HZ / FOC_MCPWM_PERIOD);
 #else
         // this is closed-loop calculation using encoder feedback
-        float mech_deg = as5600_get_mech_deg(0) - mech_zero;
+        float raw_mech_deg = as5600_get_mech_deg(0);
+        encoder_angle = raw_mech_deg;
+        float mech_deg = raw_mech_deg - mech_zero;
         float rotor_elec = mech_deg * POLE_PAIRS;
         elec_theta_deg = rotor_elec + torque_offset;
 #endif

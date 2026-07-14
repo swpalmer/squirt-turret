@@ -3,6 +3,7 @@
 
 extern volatile float rpm;
 extern volatile float angle;
+extern volatile float encoder_angle;
 extern volatile bool motorEnable;
 // For a PID controller
 extern volatile float Kp;

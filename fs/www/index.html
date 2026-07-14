@@ -68,8 +68,11 @@
 				tabindex="0"
 			>
 				<div class="dial-tick"></div>
+				<div class="dial-handle dial-handle-encoder" id="encoderHandle"></div>
 				<div class="dial-handle" id="angleHandle"></div>
 			</div>
+			<div class="value-display" id="encoderAngleValue">0&deg;</div>
+			<label>Encoder (AS5600):</label>
 
 			<div class="status" id="statusMessage">Ready</div>
 		</div>
@@ -82,6 +85,7 @@
 			<div>motor enable: <span id="motorEnableState"></span></div>
 			<div>rpm: <span id="rpmState"></span></div>
 			<div>angle: <span id="angleState"></span></div>
+			<div>encoder angle: <span id="encoderAngleState"></span></div>
 		</div>
 		<script type="text/javascript" src="code.js"></script>
 	</body>

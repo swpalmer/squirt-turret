@@ -54,14 +54,16 @@ esp_err_t state_handler(httpd_req_t *req) {
         "\"Kd\":%f,\n"
         "\"motorEnable\":%s,\n"
         "\"rpm\":%f,\n"
-        "\"angle\":%f\n"
+        "\"angle\":%f,\n"
+        "\"encoderAngle\":%f\n"
         "}",
       Kp,
       Ki,
       Kd,
       motorEnable ? "true" : "false",
       rpm,
-      angle);
+      angle,
+      encoder_angle);
     httpd_resp_set_type(req, "text/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
