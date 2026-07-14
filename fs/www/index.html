@@ -55,16 +55,21 @@
 				class="slider"
 				id="rpm"
 			/>
-			<label for="angle">Angle:</label>
-			<input
-				type="range"
-				min="0"
-				max="500"
-				value="20"
-				step="1"
-				class="slider"
-				id="angle"
-			/>
+			<h2>Aim</h2>
+			<div class="value-display" id="angleValue">0&deg;</div>
+			<div
+				class="dial"
+				id="angleDial"
+				role="slider"
+				aria-label="Aim angle"
+				aria-valuemin="0"
+				aria-valuemax="360"
+				aria-valuenow="0"
+				tabindex="0"
+			>
+				<div class="dial-tick"></div>
+				<div class="dial-handle" id="angleHandle"></div>
+			</div>
 
 			<div class="status" id="statusMessage">Ready</div>
 		</div>

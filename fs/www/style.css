@@ -63,3 +63,50 @@ h2 {
 	font-size: 0.8rem;
 	color: #666;
 }
+
+.dial {
+	position: relative;
+	width: 180px;
+	height: 180px;
+	margin: 10px auto 20px;
+	border-radius: 50%;
+	background: radial-gradient(circle at 50% 50%, #fff 0%, #eee 60%, #ccc 100%);
+	border: 2px solid #999;
+	touch-action: none;
+	cursor: grab;
+	user-select: none;
+}
+
+.dial:active {
+	cursor: grabbing;
+}
+
+.dial:focus {
+	outline: 2px solid #007bff;
+	outline-offset: 3px;
+}
+
+.dial-tick {
+	position: absolute;
+	top: 8px;
+	left: 50%;
+	width: 2px;
+	height: 14px;
+	background: #999;
+	transform: translateX(-50%);
+	pointer-events: none;
+}
+
+.dial-handle {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	background: #007bff;
+	transform: translate(-50%, -50%);
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+	pointer-events: none;
+	transition: background 0.15s ease-in-out;
+}

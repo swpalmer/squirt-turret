@@ -5,7 +5,6 @@ const Ki_slider = document.getElementById("Ki");
 const Kd_slider = document.getElementById("Kd");
 const motor_enable = document.getElementById("motorEnable");
 const rpm_slider = document.getElementById("rpm");
-const angle_slider = document.getElementById("angle");
 
 const status = document.getElementById("statusMessage");
 
@@ -42,7 +41,11 @@ function updateState(data) {
 	Kd_state.innerHTML = data.Kd;
 	rpm_state.innerHTML = data.rpm;
 	angle_state.innerHTML = data.angle;
-	motor_enable_state.innerHTML = data.motor_enable ? "Enabled" : "Disabled";
+	motor_enable_state.innerHTML = data.motorEnable ? "Enabled" : "Disabled";
+	// Don't fight the user while they're actively dragging the dial
+	if (!angleDialDragging) {
+		setDialAngle(data.angle, false);
+	}
 }
 
 async function updateValueOnServer(key, value) {
@@ -91,4 +94,78 @@ Ki_slider.oninput = updateFunction;
 Kd_slider.oninput = updateFunction;
 motor_enable.oninput = updateFunction;
 rpm_slider.oninput = updateFunction;
-angle_slider.oninput = updateFunction;
+
+// ----- Circular "Aim" dial (drag-in-a-circle angle control) -----
+const angleDial = document.getElementById("angleDial");
+const angleHandle = document.getElementById("angleHandle");
+const angleValueDisplay = document.getElementById("angleValue");
+
+// Distance (px) from dial center to handle center; keep the 28px handle inside the 180px dial.
+const DIAL_HANDLE_RADIUS = 65;
+
+let angleDialDragging = false;
+let currentAngle = 0;
+
+// 0 deg is straight up, increasing clockwise, wrapped to [0, 360)
+function setDialAngle(deg, sendUpdate) {
+	deg = ((deg % 360) + 360) % 360;
+	currentAngle = deg;
+
+	const rad = (deg * Math.PI) / 180;
+	const x = Math.sin(rad) * DIAL_HANDLE_RADIUS;
+	const y = -Math.cos(rad) * DIAL_HANDLE_RADIUS;
+	angleHandle.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+
+	const rounded = Math.round(deg);
+	angleValueDisplay.innerHTML = `${rounded}&deg;`;
+	angleDial.setAttribute("aria-valuenow", rounded);
+
+	if (sendUpdate) {
+		processChange("angle", deg.toFixed(1));
+	}
+}
+
+function angleFromPointerEvent(e) {
+	const rect = angleDial.getBoundingClientRect();
+	const cx = rect.left + rect.width / 2;
+	const cy = rect.top + rect.height / 2;
+	const dx = e.clientX - cx;
+	const dy = e.clientY - cy;
+	return (Math.atan2(dx, -dy) * 180) / Math.PI;
+}
+
+angleDial.addEventListener("pointerdown", (e) => {
+	angleDialDragging = true;
+	angleDial.setPointerCapture(e.pointerId);
+	angleDial.focus();
+	setDialAngle(angleFromPointerEvent(e), true);
+});
+
+angleDial.addEventListener("pointermove", (e) => {
+	if (!angleDialDragging) return;
+	setDialAngle(angleFromPointerEvent(e), true);
+});
+
+function endAngleDrag(e) {
+	if (!angleDialDragging) return;
+	angleDialDragging = false;
+	try {
+		angleDial.releasePointerCapture(e.pointerId);
+	} catch (err) {
+		// pointer capture may already be released, nothing to do
+	}
+}
+angleDial.addEventListener("pointerup", endAngleDrag);
+angleDial.addEventListener("pointercancel", endAngleDrag);
+
+angleDial.addEventListener("keydown", (e) => {
+	let delta = 0;
+	if (e.key === "ArrowRight" || e.key === "ArrowUp") delta = 1;
+	else if (e.key === "ArrowLeft" || e.key === "ArrowDown") delta = -1;
+	else return;
+	e.preventDefault();
+	setDialAngle(currentAngle + delta, true);
+});
+
+// Initialize handle position
+setDialAngle(currentAngle, false);
