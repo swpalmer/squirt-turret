@@ -224,6 +224,9 @@ httpd_handle_t start_webserver(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     // Enable wildcard matching
     config.uri_match_fn = httpd_uri_match_wildcard;
+    // Keep HTTP request handling on core 0, alongside WiFi/event handling,
+    // so it doesn't contend with the FOC loop pinned to core 1.
+    config.core_id = 0;
     httpd_handle_t server = NULL;
 
     if (httpd_start(&server, &config) == ESP_OK) {

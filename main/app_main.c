@@ -129,25 +129,10 @@ void foc_set_angle(float elec_theta_deg) {
     ESP_ERROR_CHECK(svpwm_inverter_set_duty(inverter1, uvw_duty[0], uvw_duty[1], uvw_duty[2]));
 }
 
-void app_main(void)
+// Runs the inverter/PWM setup, sensor calibration, and the FOC control loop.
+// Pinned to core 1 so it never contends with WiFi/HTTP handling on core 0.
+void foc_task(void *arg)
 {
-    ESP_LOGI(TAG, "Hello FOC");
-
-    esp_err_t ret = start_filesystem();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start filesystem: %s", esp_err_to_name(ret));
-        return;
-    }
-    ESP_LOGI(TAG, "Files in root directory:");
-    list_files("/fs");
-    ESP_LOGI(TAG, "Files in /fs/www directory:");
-    list_files("/fs/www");
-
-    wifi_init();
-    wifi_scan_and_print();
-    ESP_LOGI(TAG, "Connecting to WiFi...");
-    wifi_connect(AP_NAME, AP_PASSWORD);
-
     // counting semaphore used to sync update foc calculation when mcpwm timer updated
     SemaphoreHandle_t update_semaphore = xSemaphoreCreateCounting(1, 0);
 
@@ -245,4 +230,30 @@ void app_main(void)
     bsp_bridge_driver_enable(false);
     ESP_ERROR_CHECK(svpwm_inverter_start(inverter1, MCPWM_TIMER_STOP_EMPTY));
     ESP_ERROR_CHECK(svpwm_del_inverter(inverter1));
+    vTaskDelete(NULL);
+}
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "Hello FOC");
+
+    esp_err_t ret = start_filesystem();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start filesystem: %s", esp_err_to_name(ret));
+        return;
+    }
+    ESP_LOGI(TAG, "Files in root directory:");
+    list_files("/fs");
+    ESP_LOGI(TAG, "Files in /fs/www directory:");
+    list_files("/fs/www");
+
+    // WiFi event handling (esp_event/wifi driver tasks) stays on core 0, per
+    // CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0 and CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0.
+    wifi_init();
+    wifi_scan_and_print();
+    ESP_LOGI(TAG, "Connecting to WiFi...");
+    wifi_connect(AP_NAME, AP_PASSWORD);
+
+    // FOC computation and PWM adjustment run in their own task, pinned to core 1.
+    xTaskCreatePinnedToCore(foc_task, "foc_task", 4096, NULL, 5, NULL, 1);
 }
