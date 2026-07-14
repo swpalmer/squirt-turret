@@ -3,9 +3,11 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -24,15 +26,15 @@ static const char *TAG = "example_foc";
 
 
 // State
-volatile float rpm = 20.0;
+volatile float rpm = 10.0;
 volatile float angle = 0.0;
 volatile float encoder_angle = 0.0;
 volatile bool motorEnable = true;
 
 // For a PID controller
-volatile float Kp = 0.0;
+volatile float Kp = 0.6;
 volatile float Ki = 0.0;
-volatile float Kd = 0.0;
+volatile float Kd = 0.05;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
@@ -76,6 +78,17 @@ volatile float Kd = 0.0;
 
 #define FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
 #define FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
+#define FOC_LOOP_DT_S (1.0f / (FOC_MCPWM_TIMER_RESOLUTION_HZ / (float)FOC_MCPWM_PERIOD))
+
+// Position PID output feeds torque_offset, the electrical lead angle ahead of the
+// rotor's electrical angle. Torque falls off past 90 deg lead, so clamp well inside that.
+#define MAX_TORQUE_OFFSET_DEG 60.0f
+
+// AS5600 is polled from its own task (see as5600_task) rather than inline in the
+// 10kHz FOC loop -- a single I2C transaction can easily take longer than the 100us
+// PWM period, which was stalling/jittering commutation. 2ms is comfortably slower
+// than one transaction takes, and far faster than this mechanism's motion.
+#define AS5600_POLL_PERIOD_MS 2
 
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 #define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
@@ -106,6 +119,17 @@ bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data
 inverter_handle_t inverter1;
 foc_dq_coord_t dq_out = {_IQ(0), _IQ(0)};
 
+// Shortest signed error from current to target, wrapped to (-180, 180] degrees.
+float wrap_angle_error_deg(float target_deg, float current_deg) {
+    float diff = fmodf(target_deg - current_deg, 360.0f);
+    if (diff > 180.0f) {
+        diff -= 360.0f;
+    } else if (diff <= -180.0f) {
+        diff += 360.0f;
+    }
+    return diff;
+}
+
 void foc_set_angle(float elec_theta_deg) {
 	foc_ab_coord_t ab_out;
     foc_uvw_coord_t uvw_out;
@@ -128,6 +152,37 @@ void foc_set_angle(float elec_theta_deg) {
 
     // output pwm duty
     ESP_ERROR_CHECK(svpwm_inverter_set_duty(inverter1, uvw_duty[0], uvw_duty[1], uvw_duty[2]));
+}
+
+// Rate of change of encoder_angle, in deg/s, computed by as5600_task from its own
+// measured sample interval. Internal to this file -- foc_task uses it in place of
+// differentiating encoder_angle itself against the FOC loop's fixed tick rate.
+static volatile float encoder_velocity_deg_s = 0.0f;
+
+// Polls the AS5600 on its own schedule and publishes encoder_angle/encoder_velocity_deg_s.
+// Pinned to core 0 (with WiFi/HTTP) so its I2C transactions never block the
+// time-critical FOC loop on core 1 -- foc_task must never touch the sensor directly.
+void as5600_task(void *arg)
+{
+    as5600_init(0);
+
+    float last_deg = as5600_get_mech_deg(0);
+    int64_t last_us = esp_timer_get_time();
+    encoder_angle = last_deg;
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(AS5600_POLL_PERIOD_MS));
+
+        float deg = as5600_get_mech_deg(0);
+        int64_t now_us = esp_timer_get_time();
+        float dt_s = (now_us - last_us) / 1e6f;
+
+        encoder_velocity_deg_s = wrap_angle_error_deg(deg, last_deg) / dt_s;
+        encoder_angle = deg;
+
+        last_deg = deg;
+        last_us = now_us;
+    }
 }
 
 // Runs the inverter/PWM setup, sensor calibration, and the FOC control loop.
@@ -180,11 +235,10 @@ void foc_task(void *arg)
     bsp_bridge_driver_init();
     bsp_bridge_driver_enable(true);
 
-    // align sensor
-    as5600_init(0);
-    //as5600_init(1);// only one sensor for now
-    float mech_deg = as5600_get_mech_deg(0);
-    ESP_LOGI(TAG, "Mechanical angle: %.2f deg", mech_deg);
+    // Sensor is owned by as5600_task on core 0; this just logs whatever it has
+    // published so far. as5600_task is started well before this point in
+    // app_main, so a real reading is expected here.
+    ESP_LOGI(TAG, "Mechanical angle: %.2f deg", encoder_angle);
 
     // force 0 degree electrical angle
     // after inverter enable
@@ -194,11 +248,11 @@ void foc_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    float mech_zero = as5600_get_mech_deg(0);
+    float mech_zero = encoder_angle;
     ESP_LOGI(TAG, "Mech. zero: %.2f deg", mech_zero);
 
-    float torque_offset = 10.0f;
-    ESP_LOGI(TAG, "Torque offset: %.2f deg", torque_offset);
+    // Aim position PID state (persists across loop iterations)
+    float aim_error_integral = 0.0f;
 
     ESP_LOGI(TAG, "Start FOC");
     while (true) {
@@ -214,11 +268,43 @@ void foc_task(void *arg)
         // Calculate elec_theta_deg increase step of 50Hz output on 10000Hz call
         elec_theta_deg += (foc_wave_freq * 360.f) / (FOC_MCPWM_TIMER_RESOLUTION_HZ / FOC_MCPWM_PERIOD);
 #else
-        // this is closed-loop calculation using encoder feedback
-        float raw_mech_deg = as5600_get_mech_deg(0);
-        encoder_angle = raw_mech_deg;
+        // this is closed-loop calculation using encoder feedback.
+        // raw_mech_deg/encoder_velocity_deg_s come from as5600_task (core 0) --
+        // this loop never talks to the sensor directly, so it actually holds the
+        // hardware-clocked 100us MCPWM tick instead of stalling on I2C.
+        float raw_mech_deg = encoder_angle;
         float mech_deg = raw_mech_deg - mech_zero;
-        float rotor_elec = mech_deg * POLE_PAIRS;
+        float rotor_elec = - mech_deg * POLE_PAIRS;
+
+        // ---- Aim position control ----
+        // PID on the shortest angular error drives torque_offset (electrical lead
+        // angle), which steers the aim angle toward the web UI's commanded `angle`.
+        // NOTE: on this test rig the AS5600 sits on the motor shaft itself, so
+        // raw_mech_deg IS the aim angle (1:1 gearing). In the final design the
+        // sensor moves to the geared-down output/aim shaft, which turns slower
+        // than the motor -- at that point raw_mech_deg above (used for
+        // commutation) and the aim feedback below need to come from two
+        // different sensors, one per shaft.
+        float aim_error_deg = wrap_angle_error_deg(angle, raw_mech_deg);
+        aim_error_integral += aim_error_deg * FOC_LOOP_DT_S;
+        aim_error_integral = fmaxf(fminf(aim_error_integral, MAX_TORQUE_OFFSET_DEG), -MAX_TORQUE_OFFSET_DEG);
+
+        // Error derivative ~= -position velocity (assumes `angle`, the human-set aim
+        // target, changes slowly compared to the encoder's sampling rate). Using
+        // as5600_task's own measured velocity avoids differentiating a signal that
+        // only actually updates every ~2ms against this loop's fixed 100us tick --
+        // that mismatch was amplifying encoder noise into large torque swings.
+        float aim_error_deriv = -encoder_velocity_deg_s;
+
+        // Negated: with rotor_elec now using -mech_deg (see sign fix above), a
+        // positive torque_offset physically drives raw_mech_deg DOWN. Without this
+        // negation the loop pushes away from the target instead of toward it --
+        // which, thanks to the wrapped error metric, doesn't run away to infinity
+        // but settles into a stable equilibrium at the antipodal point (180 deg
+        // off target), matching the "buzzes at 180 deg out of phase" symptom.
+        float torque_offset = -(Kp * aim_error_deg + Ki * aim_error_integral + Kd * aim_error_deriv);
+        torque_offset = fmaxf(fminf(torque_offset, MAX_TORQUE_OFFSET_DEG), -MAX_TORQUE_OFFSET_DEG);
+
         elec_theta_deg = rotor_elec + torque_offset;
 #endif
         if (elec_theta_deg > 360) {
@@ -249,6 +335,11 @@ void app_main(void)
     list_files("/fs");
     ESP_LOGI(TAG, "Files in /fs/www directory:");
     list_files("/fs/www");
+
+    // Sensor polling stays on core 0 too, alongside WiFi/HTTP -- keeps I2C entirely
+    // off the time-critical FOC loop on core 1. Started early so it has a real
+    // reading published well before foc_task's alignment step needs one.
+    xTaskCreatePinnedToCore(as5600_task, "as5600_task", 4096, NULL, 5, NULL, 0);
 
     // WiFi event handling (esp_event/wifi driver tasks) stays on core 0, per
     // CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0 and CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0.

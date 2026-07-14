@@ -9,13 +9,14 @@
 	<body>
 		<div class="container">
 			<h2>Tune PID Coefficient Values</h2>
-			<div class="value-display" id="KpValue">15</div>
+			<div class="value-display" id="KpValue">0.6</div>
 			<label for="Kp">P:</label>
 			<input
 				type="range"
 				min="0"
-				max="30"
-				value="15"
+				max="3"
+				value="0.6"
+				step="0.02"
 				class="slider"
 				id="Kp"
 			/>
@@ -24,20 +25,20 @@
 			<input
 				type="range"
 				min="0"
-				max="1"
+				max="0.3"
 				value="0"
-				step="0.01"
+				step="0.005"
 				class="slider"
 				id="Ki"
 			/>
-			<div class="value-display" id="KdValue">0</div>
+			<div class="value-display" id="KdValue">0.05</div>
 			<label for="Kd">D:</label>
 			<input
 				type="range"
 				min="0"
-				max="10"
-				value="0"
-				step="0.05"
+				max="1"
+				value="0.05"
+				step="0.01"
 				class="slider"
 				id="Kd"
 			/>
