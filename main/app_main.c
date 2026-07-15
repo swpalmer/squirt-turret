@@ -31,7 +31,12 @@ volatile float angle = 0.0;
 volatile float encoder_angle = 0.0;
 volatile bool motorEnable = true;
 
-// For a PID controller
+// For PID controller
+// These worked well for a 1:1 gear ratio
+//volatile float Kp = 1.5;
+//volatile float Ki = 0.2;
+//volatile float Kd = 0.02;
+
 volatile float Kp = 1.5;
 volatile float Ki = 0.2;
 volatile float Kd = 0.02;
@@ -82,7 +87,7 @@ volatile float Kd = 0.02;
 
 // Position PID output feeds torque_offset, the electrical lead angle ahead of the
 // rotor's electrical angle. Torque falls off past 90 deg lead, so clamp well inside that.
-#define MAX_TORQUE_OFFSET_DEG 60.0f
+#define MAX_TORQUE_OFFSET_DEG 80.0f
 
 // AS5600 is polled from its own task (see as5600_task) rather than inline in the
 // 10kHz FOC loop -- a single I2C transaction can easily take longer than the 100us
@@ -93,6 +98,14 @@ volatile float Kd = 0.02;
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 #define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
 #define POLE_PAIRS 7
+
+// Motor shaft revolutions per one revolution of the shaft the AS5600 actually
+// tracks. 1.0 means the sensor sits directly on the motor shaft (old
+// assumption). Set this to the real reduction ratio when the sensor is on a
+// slower, geared-down output/aim shaft.
+// 20-tooth motor gear driving a 100-tooth output gear -> motor turns 5x per
+// output/sensor revolution.
+#define GEAR_RATIO 5.0f
 
 void bsp_bridge_driver_init(void)
 {
@@ -248,8 +261,14 @@ void foc_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    float mech_zero = encoder_angle;
-    ESP_LOGI(TAG, "Mech. zero: %.2f deg", mech_zero);
+    // Continuous (unwrapped) tracking of the AS5600's own shaft angle, so
+    // commutation can see the motor turn through many full revolutions
+    // instead of losing position every time the sensor wraps past 360/0.
+    // Seeded from the alignment reading, so it starts at 0 relative to the
+    // electrical zero set above.
+    float last_raw_mech_deg = encoder_angle;
+    float mech_deg_gear_accum = 0.0f;
+    ESP_LOGI(TAG, "Mech. zero: %.2f deg", last_raw_mech_deg);
 
     // Aim position PID state (persists across loop iterations)
     float aim_error_integral = 0.0f;
@@ -273,18 +292,28 @@ void foc_task(void *arg)
         // this loop never talks to the sensor directly, so it actually holds the
         // hardware-clocked 100us MCPWM tick instead of stalling on I2C.
         float raw_mech_deg = encoder_angle;
-        float mech_deg = raw_mech_deg - mech_zero;
-        float rotor_elec = - mech_deg * POLE_PAIRS;
+
+        // Fold the latest sensor step into the unwrapped accumulator using the
+        // shortest signed delta, so a wrap past 360/0 doesn't register as a
+        // huge jump. Safe as long as the sensor can't move >180 gear-deg
+        // between FOC loop iterations, which at a 100us tick it never does.
+        mech_deg_gear_accum += wrap_angle_error_deg(raw_mech_deg, last_raw_mech_deg);
+        last_raw_mech_deg = raw_mech_deg;
+
+        // GEAR_RATIO reconstructs the motor shaft's own (continuous,
+        // multi-turn) angle from the geared-down sensor reading, so
+        // commutation tracks the real rotor instead of stalling after one
+        // sensor count's worth of motion.
+        float mech_deg_motor = mech_deg_gear_accum * GEAR_RATIO;
+        float rotor_elec = - mech_deg_motor * POLE_PAIRS;
 
         // ---- Aim position control ----
         // PID on the shortest angular error drives torque_offset (electrical lead
         // angle), which steers the aim angle toward the web UI's commanded `angle`.
-        // NOTE: on this test rig the AS5600 sits on the motor shaft itself, so
-        // raw_mech_deg IS the aim angle (1:1 gearing). In the final design the
-        // sensor moves to the geared-down output/aim shaft, which turns slower
-        // than the motor -- at that point raw_mech_deg above (used for
-        // commutation) and the aim feedback below need to come from two
-        // different sensors, one per shaft.
+        // `angle` and raw_mech_deg both live in the AS5600's own (single-turn,
+        // wrapped) frame, so this shortest-path error is correct regardless of
+        // GEAR_RATIO -- it's only the commutation angle above that needs the
+        // motor-shaft reconstruction.
         float aim_error_deg = wrap_angle_error_deg(angle, raw_mech_deg);
         aim_error_integral += aim_error_deg * FOC_LOOP_DT_S;
         aim_error_integral = fmaxf(fminf(aim_error_integral, MAX_TORQUE_OFFSET_DEG), -MAX_TORQUE_OFFSET_DEG);
@@ -307,10 +336,12 @@ void foc_task(void *arg)
 
         elec_theta_deg = rotor_elec + torque_offset;
 #endif
-        if (elec_theta_deg > 360) {
-            elec_theta_deg -= 360;
-        } else if (elec_theta_deg < 0) {
-            elec_theta_deg += 360;
+        // rotor_elec can be many multiples of 360 once the motor has turned
+        // several revolutions (GEAR_RATIO > 1 especially), so wrap with
+        // fmodf rather than a single conditional subtract/add.
+        elec_theta_deg = fmodf(elec_theta_deg, 360.0f);
+        if (elec_theta_deg < 0) {
+            elec_theta_deg += 360.0f;
         }
 
         foc_set_angle(elec_theta_deg);
