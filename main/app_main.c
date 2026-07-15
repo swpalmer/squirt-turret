@@ -32,9 +32,9 @@ volatile float encoder_angle = 0.0;
 volatile bool motorEnable = true;
 
 // For a PID controller
-volatile float Kp = 0.6;
-volatile float Ki = 0.0;
-volatile float Kd = 0.05;
+volatile float Kp = 1.5;
+volatile float Ki = 0.2;
+volatile float Kd = 0.02;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
