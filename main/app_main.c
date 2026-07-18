@@ -107,6 +107,13 @@ volatile float Kd = 0.2;
 
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 #define DRV1_FOC_WAVE_AMPL    150  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
+// Floor amplitude used when torque_offset is ~0 (settled, or barely
+// correcting). The d-axis voltage drives winding current regardless of lead
+// angle, so holding at full DRV1_FOC_WAVE_AMPL burns full current for
+// whatever torque is actually needed -- scaling amplitude down with
+// |torque_offset| (see foc_task) cuts that waste for small corrections while
+// still ramping back up to full amplitude for large moves.
+#define MIN_FOC_WAVE_AMPL     40
 #define POLE_PAIRS 7
 
 // Motor shaft revolutions per one revolution of the shaft the AS5600 actually
@@ -153,14 +160,14 @@ float wrap_angle_error_deg(float target_deg, float current_deg) {
     return diff;
 }
 
-void foc_set_angle(float elec_theta_deg) {
+void foc_set_angle(float elec_theta_deg, float wave_ampl) {
 	foc_ab_coord_t ab_out;
     foc_uvw_coord_t uvw_out;
 	int uvw_duty[3];
 	_iq elec_theta_rad = _IQmpy(_IQ(elec_theta_deg), _IQ(M_PI / 180.f));
     // In FOC motor control, we usually set Vd for alignment or weak-meg control, and set Vq for torque control.
     // As here is open loop output, use Vd is enough, and coord aligned
-    dq_out.d = _IQ(DRV1_FOC_WAVE_AMPL);
+    dq_out.d = _IQ(wave_ampl);
     foc_inverse_park_transform(elec_theta_rad, &dq_out, &ab_out);
 
     #if CONFIG_ESP_FOC_USE_SVPWM
@@ -267,7 +274,7 @@ void foc_task(void *arg)
     // after inverter enable
     float align_angle = 0.0f;
     for (int i = 0; i < 500; i++) {
-        foc_set_angle(align_angle);
+        foc_set_angle(align_angle, DRV1_FOC_WAVE_AMPL);
         vTaskDelay(pdMS_TO_TICKS(1));
     }
 
@@ -378,6 +385,13 @@ void foc_task(void *arg)
         torque_offset = fmaxf(fminf(torque_offset, MAX_TORQUE_OFFSET_DEG), -MAX_TORQUE_OFFSET_DEG);
 
         elec_theta_deg = rotor_elec + torque_offset;
+
+        // Scale d-axis voltage with how much lead angle is actually being
+        // commanded, so small corrections/near-target holding draw well under
+        // full current instead of the fixed DRV1_FOC_WAVE_AMPL regardless of
+        // load -- see MIN_FOC_WAVE_AMPL comment above.
+        float wave_ampl = MIN_FOC_WAVE_AMPL + (DRV1_FOC_WAVE_AMPL - MIN_FOC_WAVE_AMPL)
+            * (fabsf(torque_offset) / MAX_TORQUE_OFFSET_DEG);
 #endif
         // rotor_elec can be many multiples of 360 once the motor has turned
         // several revolutions (GEAR_RATIO > 1 especially), so wrap with
@@ -387,7 +401,7 @@ void foc_task(void *arg)
             elec_theta_deg += 360.0f;
         }
 
-        foc_set_angle(elec_theta_deg);
+        foc_set_angle(elec_theta_deg, wave_ampl);
     }
 
     bsp_bridge_driver_enable(false);
