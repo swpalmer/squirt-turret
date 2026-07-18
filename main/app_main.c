@@ -37,9 +37,9 @@ volatile bool motorEnable = true;
 //volatile float Ki = 0.2;
 //volatile float Kd = 0.02;
 
-volatile float Kp = 1.5;
-volatile float Ki = 0.2;
-volatile float Kd = 0.02;
+volatile float Kp = 2.5;
+volatile float Ki = 2.0;
+volatile float Kd = 0.2;
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
