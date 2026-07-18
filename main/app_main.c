@@ -87,7 +87,17 @@ volatile float Kd = 0.02;
 
 // Position PID output feeds torque_offset, the electrical lead angle ahead of the
 // rotor's electrical angle. Torque falls off past 90 deg lead, so clamp well inside that.
-#define MAX_TORQUE_OFFSET_DEG 80.0f
+#define MAX_TORQUE_OFFSET_DEG 88.0f
+
+// This project drives a fixed current amplitude (DRV1_FOC_WAVE_AMPL) regardless
+// of how much torque is actually needed, so holding position burns just as much
+// current -- and generates just as much heat -- as actively correcting a large
+// error. Once the turret is within DRIVE_DISABLE_ERROR_DEG of its target, gate the
+// DRV8302 off entirely rather than idle-holding. The wider DRIVE_ENABLE_ERROR_DEG
+// re-enable threshold (hysteresis) keeps the gate from chattering right at the
+// disable boundary.
+#define DRIVE_DISABLE_ERROR_DEG 1.5f
+#define DRIVE_ENABLE_ERROR_DEG  4.0f
 
 // AS5600 is polled from its own task (see as5600_task) rather than inline in the
 // 10kHz FOC loop -- a single I2C transaction can easily take longer than the 100us
@@ -96,7 +106,7 @@ volatile float Kd = 0.02;
 #define AS5600_POLL_PERIOD_MS 2
 
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
-#define EXAMPLE_FOC_WAVE_AMPL    100  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
+#define DRV1_FOC_WAVE_AMPL    150  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
 #define POLE_PAIRS 7
 
 // Motor shaft revolutions per one revolution of the shaft the AS5600 actually
@@ -150,7 +160,7 @@ void foc_set_angle(float elec_theta_deg) {
 	_iq elec_theta_rad = _IQmpy(_IQ(elec_theta_deg), _IQ(M_PI / 180.f));
     // In FOC motor control, we usually set Vd for alignment or weak-meg control, and set Vq for torque control.
     // As here is open loop output, use Vd is enough, and coord aligned
-    dq_out.d = _IQ(EXAMPLE_FOC_WAVE_AMPL);
+    dq_out.d = _IQ(DRV1_FOC_WAVE_AMPL);
     foc_inverse_park_transform(elec_theta_rad, &dq_out, &ab_out);
 
     #if CONFIG_ESP_FOC_USE_SVPWM
@@ -307,16 +317,49 @@ void foc_task(void *arg)
         float mech_deg_motor = mech_deg_gear_accum * GEAR_RATIO;
         float rotor_elec = - mech_deg_motor * POLE_PAIRS;
 
-        // ---- Aim position control ----
-        // PID on the shortest angular error drives torque_offset (electrical lead
-        // angle), which steers the aim angle toward the web UI's commanded `angle`.
         // `angle` and raw_mech_deg both live in the AS5600's own (single-turn,
         // wrapped) frame, so this shortest-path error is correct regardless of
         // GEAR_RATIO -- it's only the commutation angle above that needs the
         // motor-shaft reconstruction.
         float aim_error_deg = wrap_angle_error_deg(angle, raw_mech_deg);
+
+        // ---- Thermal idle ----
+        // Gate the driver off once settled, back on once the target has moved
+        // away again. motorEnable also doubles as the web UI's driver-state
+        // readout (see http-server.c).
+        if (motorEnable) {
+            if (fabsf(aim_error_deg) < DRIVE_DISABLE_ERROR_DEG) {
+                motorEnable = false;
+                aim_error_integral = 0.0f;
+                bsp_bridge_driver_enable(false);
+            }
+        } else if (fabsf(aim_error_deg) > DRIVE_ENABLE_ERROR_DEG) {
+            motorEnable = true;
+            bsp_bridge_driver_enable(true);
+        }
+
+        if (!motorEnable) {
+            // Driver is gated off -- nothing to commutate. mech_deg_gear_accum
+            // above keeps tracking the sensor regardless, so rotor_elec is
+            // still correct the instant the driver comes back on.
+            continue;
+        }
+
+        // ---- Aim position control ----
+        // PID on the shortest angular error drives torque_offset (electrical lead
+        // angle), which steers the aim angle toward the web UI's commanded `angle`.
         aim_error_integral += aim_error_deg * FOC_LOOP_DT_S;
-        aim_error_integral = fmaxf(fminf(aim_error_integral, MAX_TORQUE_OFFSET_DEG), -MAX_TORQUE_OFFSET_DEG);
+        // Anti-windup: bound the accumulator so Ki * aim_error_integral itself
+        // can't exceed the torque ceiling, whatever Ki is set to. Clamping the
+        // raw accumulator directly to MAX_TORQUE_OFFSET_DEG (as before) capped
+        // the integral's real contribution at Ki * MAX_TORQUE_OFFSET_DEG -- for
+        // Ki < 1 that's well short of the actual ceiling, so the integral could
+        // never build up enough lead angle to break static friction/cogging
+        // near the target no matter how long the error persisted.
+        if (Ki > 0.0f) {
+            float integral_limit = MAX_TORQUE_OFFSET_DEG / Ki;
+            aim_error_integral = fmaxf(fminf(aim_error_integral, integral_limit), -integral_limit);
+        }
 
         // Error derivative ~= -position velocity (assumes `angle`, the human-set aim
         // target, changes slowly compared to the encoder's sampling rate). Using
