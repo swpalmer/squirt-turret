@@ -8,14 +8,6 @@ const rpm_slider = document.getElementById("rpm");
 
 const status = document.getElementById("statusMessage");
 
-// State Display
-const Kp_state = document.getElementById("KpState");
-const Ki_state = document.getElementById("KiState");
-const Kd_state = document.getElementById("KdState");
-const rpm_state = document.getElementById("rpmState");
-const angle_state = document.getElementById("angleState");
-const encoder_angle_state = document.getElementById("encoderAngleState");
-const motor_enable_state = document.getElementById("motorEnableState");
 async function fetchState() {
 	const resp = await fetch("/api/state");
 	if (resp.ok) {
@@ -37,13 +29,6 @@ function debounce(func, timeout = 100) {
 }
 
 function updateState(data) {
-	Kp_state.innerHTML = data.Kp;
-	Ki_state.innerHTML = data.Ki;
-	Kd_state.innerHTML = data.Kd;
-	rpm_state.innerHTML = data.rpm;
-	angle_state.innerHTML = data.angle;
-	encoder_angle_state.innerHTML = data.encoderAngle;
-	motor_enable_state.innerHTML = data.motorEnable ? "Enabled" : "Disabled";
 	// Don't fight the user while they're actively dragging the dial
 	if (!angleDialDragging) {
 		setDialAngle(data.angle, false);
