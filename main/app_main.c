@@ -30,6 +30,9 @@ volatile float rpm = 10.0;
 volatile float angle = 0.0;
 volatile float encoder_angle = 0.0;
 volatile bool motorEnable = true;
+// Elevation for the second (pitch) DRV8302 axis, 0-180 deg (horizon-front to
+// horizon-back). Accepted from the web UI, but not yet wired to a motor.
+volatile float pitch = 0.0;
 
 // For PID controller
 // These worked well for a 1:1 gear ratio

@@ -51,17 +51,46 @@ h2 {
 }
 
 .value-display {
-	float: right;
 	font-family: monospace;
 	font-size: 1.5rem;
 	font-weight: bold;
 	color: #007bff;
 }
 
+.control {
+	margin-bottom: 12px;
+}
+
+.control-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
 .status {
 	margin-top: 10px;
 	font-size: 0.8rem;
 	color: #666;
+}
+
+.advanced-toggle {
+	background: none;
+	border: none;
+	color: #007bff;
+	font-size: 0.85rem;
+	cursor: pointer;
+	margin-top: 15px;
+	padding: 0;
+}
+
+.advanced-toggle:hover {
+	text-decoration: underline;
+}
+
+.advanced {
+	margin-top: 15px;
+	padding-top: 15px;
+	border-top: 1px solid #ddd;
 }
 
 .dial {

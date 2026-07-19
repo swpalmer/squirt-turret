@@ -55,7 +55,8 @@ esp_err_t state_handler(httpd_req_t *req) {
         "\"motorEnable\":%s,\n"
         "\"rpm\":%f,\n"
         "\"angle\":%f,\n"
-        "\"encoderAngle\":%f\n"
+        "\"encoderAngle\":%f,\n"
+        "\"pitch\":%f\n"
         "}",
       Kp,
       Ki,
@@ -63,7 +64,8 @@ esp_err_t state_handler(httpd_req_t *req) {
       motorEnable ? "true" : "false",
       rpm,
       angle,
-      encoder_angle);
+      encoder_angle,
+      pitch);
     httpd_resp_set_type(req, "text/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
@@ -89,6 +91,7 @@ void process_query_param(const char *param, const char *value)
     QUERY_PARAM(Kd,f)
     QUERY_PARAM(rpm,f)
     QUERY_PARAM(angle,f)
+    QUERY_PARAM(pitch,f)
     DONE_QUERY_PARAMS
 }
 

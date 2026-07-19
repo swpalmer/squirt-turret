@@ -3,8 +3,7 @@ console.log("Installing event handlers...");
 const Kp_slider = document.getElementById("Kp");
 const Ki_slider = document.getElementById("Ki");
 const Kd_slider = document.getElementById("Kd");
-const motor_enable = document.getElementById("motorEnable");
-const rpm_slider = document.getElementById("rpm");
+const pitch_slider = document.getElementById("pitch");
 
 const status = document.getElementById("statusMessage");
 
@@ -80,8 +79,17 @@ const updateFunction = function () {
 Kp_slider.oninput = updateFunction;
 Ki_slider.oninput = updateFunction;
 Kd_slider.oninput = updateFunction;
-motor_enable.oninput = updateFunction;
-rpm_slider.oninput = updateFunction;
+pitch_slider.oninput = updateFunction;
+
+// ----- Advanced (PID tuning) section, hidden by default -----
+const advancedToggle = document.getElementById("advancedToggle");
+const advancedControls = document.getElementById("advancedControls");
+
+advancedToggle.addEventListener("click", () => {
+	const showing = advancedControls.hidden;
+	advancedControls.hidden = !showing;
+	advancedToggle.textContent = showing ? "Hide Advanced" : "Show Advanced";
+});
 
 // ----- Circular "Aim" dial (drag-in-a-circle angle control) -----
 const angleDial = document.getElementById("angleDial");
