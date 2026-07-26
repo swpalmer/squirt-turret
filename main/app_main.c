@@ -102,7 +102,7 @@ volatile float PitchKd = 0.2;
 // TODO: not wired yet -- placeholder. Update GPIO (and active level in
 // pitch_task's gpio_config_t, if not active-low) once the switch is actually
 // installed.
-#define PITCH_LIMIT_SWITCH_GPIO   39
+#define PITCH_LIMIT_SWITCH_GPIO   22
 
 #endif
 
@@ -177,6 +177,18 @@ float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 // installed switch. Expected to trip on every boot until the switch is
 // actually wired, since PITCH_LIMIT_SWITCH_GPIO is currently a placeholder.
 #define PITCH_HOMING_MAX_TRAVEL_DEG (320.0f * CAPSTAN_RATIO)
+
+// Touch the limit switch this many times (approach until triggered, back off
+// until released) rather than trusting a single trip. Catches a switch
+// that's stuck closed, bouncy, or mechanically loose -- if it can't release
+// after being backed off from, or the touch readings disagree with each
+// other by more than PITCH_HOMING_MAX_TRIP_SPREAD_DEG, homing fails rather
+// than trusting a possibly-bogus position. The final home offset is the
+// average of all touches.
+#define PITCH_HOMING_TOUCH_COUNT 3
+// Motor-frame accum units (already CAPSTAN_RATIO-scaled), ~2 deg of
+// output-frame slop.
+#define PITCH_HOMING_MAX_TRIP_SPREAD_DEG (2.0f * CAPSTAN_RATIO)
 
 void bsp_bridge_driver_init(int en_gpio)
 {
@@ -503,6 +515,40 @@ void foc_task(void *arg)
 }
 
 #ifndef MINI_S3
+// Jogs the pitch motor open-loop (direction * PITCH_HOMING_STEP_DEG_PER_TICK
+// per tick at PITCH_HOMING_WAVE_AMPL) until the limit switch reads
+// stop_when_triggered, updating the caller's angle/accumulator/last-raw
+// state each step. Returns false (without having reached that switch state)
+// if travel since the call started exceeds PITCH_HOMING_MAX_TRAVEL_DEG --
+// callers treat that as a fault (missing/stuck switch) rather than retrying
+// forever.
+static bool pitch_jog_until_switch(inverter_handle_t inverter, float direction,
+                                    bool stop_when_triggered, float *elec_angle,
+                                    float *mech_accum, float *last_raw_mech_deg)
+{
+    float travel_start = *mech_accum;
+    while (true) {
+        float raw_mech_deg = pitch_encoder_raw_deg;
+        *mech_accum += wrap_angle_error_deg(raw_mech_deg, *last_raw_mech_deg);
+        *last_raw_mech_deg = raw_mech_deg;
+
+        bool triggered = (gpio_get_level(PITCH_LIMIT_SWITCH_GPIO) == 0);
+        if (triggered == stop_when_triggered) {
+            return true;
+        }
+        if (fabsf(*mech_accum - travel_start) > PITCH_HOMING_MAX_TRAVEL_DEG) {
+            return false;
+        }
+
+        *elec_angle = fmodf(*elec_angle + direction * PITCH_HOMING_STEP_DEG_PER_TICK, 360.0f);
+        if (*elec_angle < 0) {
+            *elec_angle += 360.0f;
+        }
+        foc_set_angle(inverter, *elec_angle, PITCH_HOMING_WAVE_AMPL);
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
 // Homes against the limit switch (pitch minimum), then runs closed-loop PID
 // position control on the capstan-corrected pitch_actual. Mirrors foc_task's
 // structure/tuning approach; differs in that the AS5600 is on the motor shaft
@@ -583,38 +629,73 @@ void pitch_task(void *arg)
     float home_accum_offset = 0.0f;
 
     ESP_LOGI(TAG, "Homing pitch...");
-    while (!pitchCalibrated && !pitchHomingFailed) {
-        float raw_mech_deg = pitch_encoder_raw_deg;
-        mech_deg_gear_accum += wrap_angle_error_deg(raw_mech_deg, last_raw_mech_deg);
-        last_raw_mech_deg = raw_mech_deg;
 
-        bool limit_switch_triggered = (gpio_get_level(PITCH_LIMIT_SWITCH_GPIO) == 0);
-        if (limit_switch_triggered) {
-            home_accum_offset = mech_deg_gear_accum;
+    // If the switch already reads triggered before anything has moved, don't
+    // trust it and declare victory -- that reading could mean it's stuck
+    // closed, or we're already resting past the limit. Either way, confirm
+    // it can actually release before doing anything else.
+    if (gpio_get_level(PITCH_LIMIT_SWITCH_GPIO) == 0) {
+        ESP_LOGW(TAG, "Pitch limit switch already triggered at startup -- backing off before homing");
+        if (!pitch_jog_until_switch(inverter2, -PITCH_HOMING_DIRECTION, false,
+                                     &align_angle, &mech_deg_gear_accum, &last_raw_mech_deg)) {
+            pitchHomingFailed = true;
+            ESP_LOGE(TAG, "Pitch limit switch appears stuck closed -- never released");
+        }
+    }
+
+    // Touch the switch PITCH_HOMING_TOUCH_COUNT times (approach until
+    // triggered, then back off until released, except after the final
+    // touch) so a stuck/bouncy/mechanically loose switch gets caught instead
+    // of trusted on a single sample, and the home position is an average of
+    // several readings rather than just one.
+    float trip_readings[PITCH_HOMING_TOUCH_COUNT];
+    for (int touch = 0; !pitchHomingFailed && touch < PITCH_HOMING_TOUCH_COUNT; touch++) {
+        if (!pitch_jog_until_switch(inverter2, PITCH_HOMING_DIRECTION, true,
+                                     &align_angle, &mech_deg_gear_accum, &last_raw_mech_deg)) {
+            pitchHomingFailed = true;
+            ESP_LOGE(TAG, "Pitch homing failed: travelled %.2f deg without tripping the limit switch", PITCH_HOMING_MAX_TRAVEL_DEG);
+            break;
+        }
+        trip_readings[touch] = mech_deg_gear_accum;
+        ESP_LOGI(TAG, "Pitch limit switch touch %d/%d at motor accum %.2f deg",
+                 touch + 1, PITCH_HOMING_TOUCH_COUNT, mech_deg_gear_accum);
+
+        if (touch + 1 < PITCH_HOMING_TOUCH_COUNT) {
+            if (!pitch_jog_until_switch(inverter2, -PITCH_HOMING_DIRECTION, false,
+                                         &align_angle, &mech_deg_gear_accum, &last_raw_mech_deg)) {
+                pitchHomingFailed = true;
+                ESP_LOGE(TAG, "Pitch limit switch appears stuck closed -- never released after touch %d", touch + 1);
+                break;
+            }
+        }
+    }
+
+    if (!pitchHomingFailed) {
+        float trip_sum = 0.0f, trip_min = trip_readings[0], trip_max = trip_readings[0];
+        for (int i = 0; i < PITCH_HOMING_TOUCH_COUNT; i++) {
+            trip_sum += trip_readings[i];
+            trip_min = fminf(trip_min, trip_readings[i]);
+            trip_max = fmaxf(trip_max, trip_readings[i]);
+        }
+        float trip_spread = trip_max - trip_min;
+        if (trip_spread > PITCH_HOMING_MAX_TRIP_SPREAD_DEG) {
+            // Fails safe rather than trusting a switch that can't repeat its
+            // own trip point.
+            pitchHomingFailed = true;
+            ESP_LOGE(TAG, "Pitch homing failed: touch readings disagreed by %.2f deg (limit switch may be unreliable)", trip_spread);
+        } else {
+            home_accum_offset = trip_sum / PITCH_HOMING_TOUCH_COUNT;
             pitch_actual = PITCH_HOME_DEG;
             pitchCalibrated = true;
-            ESP_LOGI(TAG, "Pitch homed at motor accum %.2f deg", home_accum_offset);
-            break;
+            ESP_LOGI(TAG, "Pitch homed at averaged motor accum %.2f deg (spread %.2f deg)", home_accum_offset, trip_spread);
         }
-
-        if (fabsf(mech_deg_gear_accum) > PITCH_HOMING_MAX_TRAVEL_DEG) {
-            // Fails safe: stays disabled below rather than jogging forever.
-            // Expected until PITCH_LIMIT_SWITCH_GPIO is wired to a real switch.
-            pitchHomingFailed = true;
-            bsp_bridge_driver_enable(FOC_DRV2_EN_GPIO, false);
-            ESP_LOGE(TAG, "Pitch homing failed: travelled %.2f deg without tripping the limit switch", mech_deg_gear_accum);
-            break;
-        }
-
-        align_angle = fmodf(align_angle + PITCH_HOMING_DIRECTION * PITCH_HOMING_STEP_DEG_PER_TICK, 360.0f);
-        if (align_angle < 0) {
-            align_angle += 360.0f;
-        }
-        foc_set_angle(inverter2, align_angle, PITCH_HOMING_WAVE_AMPL);
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     if (pitchHomingFailed) {
+        // Fails safe: stays disabled rather than continuing to jog or
+        // trusting an unreliable position. Expected on every boot until
+        // PITCH_LIMIT_SWITCH_GPIO is wired to a real, working switch.
+        bsp_bridge_driver_enable(FOC_DRV2_EN_GPIO, false);
         vTaskDelete(NULL);
         return;
     }
