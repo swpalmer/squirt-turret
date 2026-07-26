@@ -48,6 +48,11 @@
 					class="slider"
 					id="pitch"
 				/>
+				<div class="control-row">
+					<label>Actual:</label>
+					<div class="value-display" id="pitchActualValue">0&deg;</div>
+				</div>
+				<div class="status" id="pitchStatus"></div>
 			</div>
 
 			<div class="status" id="statusMessage">Ready</div>
@@ -57,7 +62,7 @@
 			</button>
 
 			<div class="advanced" id="advancedControls" hidden>
-				<h2>Tune PID Coefficient Values</h2>
+				<h2>Azimuth P/I/D</h2>
 				<div class="control">
 					<div class="control-row">
 						<label for="Kp">P:</label>
@@ -101,6 +106,53 @@
 						step="0.01"
 						class="slider"
 						id="Kd"
+					/>
+				</div>
+
+				<h2>Pitch P/I/D</h2>
+				<div class="control">
+					<div class="control-row">
+						<label for="PitchKp">P:</label>
+						<div class="value-display" id="PitchKpValue">2.5</div>
+					</div>
+					<input
+						type="range"
+						min="0"
+						max="3"
+						value="2.5"
+						step="0.02"
+						class="slider"
+						id="PitchKp"
+					/>
+				</div>
+				<div class="control">
+					<div class="control-row">
+						<label for="PitchKi">I:</label>
+						<div class="value-display" id="PitchKiValue">2.0</div>
+					</div>
+					<input
+						type="range"
+						min="0"
+						max="5"
+						value="2.0"
+						step="0.02"
+						class="slider"
+						id="PitchKi"
+					/>
+				</div>
+				<div class="control">
+					<div class="control-row">
+						<label for="PitchKd">D:</label>
+						<div class="value-display" id="PitchKdValue">0.2</div>
+					</div>
+					<input
+						type="range"
+						min="0"
+						max="1"
+						value="0.2"
+						step="0.01"
+						class="slider"
+						id="PitchKd"
 					/>
 				</div>
 			</div>

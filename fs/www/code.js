@@ -4,8 +4,13 @@ const Kp_slider = document.getElementById("Kp");
 const Ki_slider = document.getElementById("Ki");
 const Kd_slider = document.getElementById("Kd");
 const pitch_slider = document.getElementById("pitch");
+const PitchKp_slider = document.getElementById("PitchKp");
+const PitchKi_slider = document.getElementById("PitchKi");
+const PitchKd_slider = document.getElementById("PitchKd");
 
 const status = document.getElementById("statusMessage");
+const pitchActualValueDisplay = document.getElementById("pitchActualValue");
+const pitchStatus = document.getElementById("pitchStatus");
 
 async function fetchState() {
 	const resp = await fetch("/api/state");
@@ -33,6 +38,16 @@ function updateState(data) {
 		setDialAngle(data.angle, false);
 	}
 	setEncoderHandleAngle(data.encoderAngle);
+
+	pitchActualValueDisplay.innerHTML = `${Math.round(data.pitchActual)}&deg;`;
+	pitch_slider.disabled = !data.pitchCalibrated;
+	if (data.pitchHomingFailed) {
+		pitchStatus.textContent = "Homing failed — limit switch never tripped";
+	} else if (!data.pitchCalibrated) {
+		pitchStatus.textContent = "Homing...";
+	} else {
+		pitchStatus.textContent = "";
+	}
 }
 
 async function updateValueOnServer(key, value) {
@@ -80,6 +95,9 @@ Kp_slider.oninput = updateFunction;
 Ki_slider.oninput = updateFunction;
 Kd_slider.oninput = updateFunction;
 pitch_slider.oninput = updateFunction;
+PitchKp_slider.oninput = updateFunction;
+PitchKi_slider.oninput = updateFunction;
+PitchKd_slider.oninput = updateFunction;
 
 // ----- Advanced (PID tuning) section, hidden by default -----
 const advancedToggle = document.getElementById("advancedToggle");

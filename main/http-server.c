@@ -42,7 +42,7 @@ float clamp(float value)
 }
 
 esp_err_t state_handler(httpd_req_t *req) {
-	size_t buf_len = 768;
+	size_t buf_len = 1024;
     char *buf = calloc(1, buf_len);
     if (!buf) {
         ESP_LOGE("REST_HANDLER", "Failed to allocate buffer");
@@ -56,7 +56,14 @@ esp_err_t state_handler(httpd_req_t *req) {
         "\"rpm\":%f,\n"
         "\"angle\":%f,\n"
         "\"encoderAngle\":%f,\n"
-        "\"pitch\":%f\n"
+        "\"pitch\":%f,\n"
+        "\"pitchActual\":%f,\n"
+        "\"pitchMotorEnable\":%s,\n"
+        "\"pitchCalibrated\":%s,\n"
+        "\"pitchHomingFailed\":%s,\n"
+        "\"PitchKp\":%f,\n"
+        "\"PitchKi\":%f,\n"
+        "\"PitchKd\":%f\n"
         "}",
       Kp,
       Ki,
@@ -65,7 +72,14 @@ esp_err_t state_handler(httpd_req_t *req) {
       rpm,
       angle,
       encoder_angle,
-      pitch);
+      pitch,
+      pitch_actual,
+      pitchMotorEnable ? "true" : "false",
+      pitchCalibrated ? "true" : "false",
+      pitchHomingFailed ? "true" : "false",
+      PitchKp,
+      PitchKi,
+      PitchKd);
     httpd_resp_set_type(req, "text/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
@@ -89,6 +103,9 @@ void process_query_param(const char *param, const char *value)
     QUERY_PARAM(Kp,f)
     QUERY_PARAM(Ki,f)
     QUERY_PARAM(Kd,f)
+    QUERY_PARAM(PitchKp,f)
+    QUERY_PARAM(PitchKi,f)
+    QUERY_PARAM(PitchKd,f)
     QUERY_PARAM(rpm,f)
     QUERY_PARAM(angle,f)
     QUERY_PARAM(pitch,f)
