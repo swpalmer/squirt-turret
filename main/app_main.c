@@ -13,6 +13,7 @@
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
 #include "foc/esp_foc.h"
+#include "hal/gpio_types.h"
 #include "svpwm/esp_svpwm.h"
 
 #include "filesystem.h"
@@ -64,19 +65,6 @@ volatile float PitchKd = 0.2;
 ////////////// Please update the following configuration according to your HardWare spec /////////////////
 //////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#ifdef MINI_S3
-#pragma message("Configured for MINI_S3 board")
-// Mini ESP32-S3 board used these
-#define FOC_DRV1_EN_GPIO         10
-#define FOC_DRV1_FAULT_GPIO      11
-#define AZIMUTH_FOC_PWM1_UH_GPIO          4
-#define AZIMUTH_FOC_PWM1_UL_GPIO          5
-#define AZIMUTH_FOC_PWM1_VH_GPIO          6
-#define AZIMUTH_FOC_PWM1_VL_GPIO          7
-#define AZIMUTH_FOC_PWM1_WH_GPIO          8
-#define AZIMUTH_FOC_PWM1_WL_GPIO          9
-// No second driver/pitch axis wired up for this board yet.
-#else
 #pragma message("Configured for ESP32 WROOM board")
 // Larger EWSP32-S3 WROOM board uses these
 // first controller (azimuth)
@@ -99,12 +87,11 @@ volatile float PitchKd = 0.2;
 #define PITCH_FOC_PWM2_WH_GPIO       25
 #define PITCH_FOC_PWM2_WL_GPIO       26
 
-// TODO: not wired yet -- placeholder. Update GPIO (and active level in
-// pitch_task's gpio_config_t, if not active-low) once the switch is actually
-// installed.
+// GPIO triggerd low when pitch limit switch activated
 #define PITCH_LIMIT_SWITCH_GPIO   22
 
-#endif
+// GPIO for squirt gun trigger
+#define TRIGGER_SWITCH_GPIO 23
 
 #define FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
 #define FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
@@ -174,8 +161,7 @@ float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 // Safety cutoff for homing, independent of PITCH_MAX_DEG -- sized to the
 // worst-case ~300 deg physical travel (not the narrower commandable range),
 // so homing isn't declared failed before it could have reached a properly
-// installed switch. Expected to trip on every boot until the switch is
-// actually wired, since PITCH_LIMIT_SWITCH_GPIO is currently a placeholder.
+// installed switch.
 #define PITCH_HOMING_MAX_TRAVEL_DEG (320.0f * CAPSTAN_RATIO)
 
 // Touch the limit switch this many times (approach until triggered, back off
@@ -213,9 +199,7 @@ bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data
 }
 
 inverter_handle_t inverter1;
-#ifndef MINI_S3
 inverter_handle_t inverter2;
-#endif
 
 // Shortest signed error from current to target, wrapped to (-180, 180] degrees.
 float wrap_angle_error_deg(float target_deg, float current_deg) {
@@ -286,7 +270,6 @@ void as5600_task(void *arg)
     }
 }
 
-#ifndef MINI_S3
 // Pitch's AS5600 lives on axis 1 (its own I2C bus, see as5600.c) and sits
 // directly on the motor shaft rather than a geared-down output shaft, so
 // these are motor-frame, single-turn readings -- pitch_task converts them
@@ -317,7 +300,6 @@ void pitch_as5600_task(void *arg)
         last_us = now_us;
     }
 }
-#endif
 
 // Runs the inverter/PWM setup, sensor calibration, and the FOC control loop.
 // Pinned to core 1 so it never contends with WiFi/HTTP handling on core 0.
@@ -514,7 +496,6 @@ void foc_task(void *arg)
     vTaskDelete(NULL);
 }
 
-#ifndef MINI_S3
 // Jogs the pitch motor open-loop (direction * PITCH_HOMING_STEP_DEG_PER_TICK
 // per tick at PITCH_HOMING_WAVE_AMPL) until the limit switch reads
 // stop_when_triggered, updating the caller's angle/accumulator/last-raw
@@ -601,9 +582,9 @@ void pitch_task(void *arg)
     bsp_bridge_driver_init(FOC_DRV2_EN_GPIO);
     bsp_bridge_driver_enable(FOC_DRV2_EN_GPIO, true);
 
-    // TODO: placeholder pin -- see PITCH_LIMIT_SWITCH_GPIO definition. Assumes
-    // active-low (switch pulls to GND); flip the level check below if wired
-    // active-high instead.
+    // see PITCH_LIMIT_SWITCH_GPIO definition.
+    // Active-low (switch pulls to GND);
+    // flip the level check below if wired active-high instead.
     gpio_config_t limit_switch_config = {
         .mode = GPIO_MODE_INPUT,
         .pin_bit_mask = 1ULL << PITCH_LIMIT_SWITCH_GPIO,
@@ -776,11 +757,21 @@ void pitch_task(void *arg)
     ESP_ERROR_CHECK(svpwm_del_inverter(inverter2));
     vTaskDelete(NULL);
 }
-#endif
 
+// Main entry point
+// ================
 void app_main(void)
 {
     ESP_LOGI(TAG, "Hello FOC");
+
+    // Do this first so trigger isn't held for long when starting
+    // Output to control "fire button"
+    gpio_config_t trigger_switch_config = {
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = 1ULL << TRIGGER_SWITCH_GPIO,
+    };
+    ESP_ERROR_CHECK(gpio_config(&trigger_switch_config));
+
 
     esp_err_t ret = start_filesystem();
     if (ret != ESP_OK) {
@@ -796,9 +787,7 @@ void app_main(void)
     // off the time-critical FOC loop on core 1. Started early so it has a real
     // reading published well before foc_task's alignment step needs one.
     xTaskCreatePinnedToCore(as5600_task, "as5600_task", 4096, NULL, 5, NULL, 0);
-#ifndef MINI_S3
     xTaskCreatePinnedToCore(pitch_as5600_task, "pitch_as5600_task", 4096, NULL, 5, NULL, 0);
-#endif
 
     // WiFi event handling (esp_event/wifi driver tasks) stays on core 0, per
     // CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0 and CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0.
@@ -807,11 +796,15 @@ void app_main(void)
     ESP_LOGI(TAG, "Connecting to WiFi...");
     wifi_connect(AP_NAME, AP_PASSWORD);
 
+    // TODO: auto-fire task
+    // This task will activate the TRIGGER_SWITCH_GPIO
+    // when both pitch and azymuth are in range and auto-fire is armed (true)
+    // auto_fire will be set via http interface by an external targeting computer
+
     // FOC computation and PWM adjustment run in their own task, pinned to core 1.
     xTaskCreatePinnedToCore(foc_task, "foc_task", 4096, NULL, 5, NULL, 1);
-#ifndef MINI_S3
+
     // Pitch's own FOC task/inverter (group 1), also pinned to core 1 so
     // homing/commutation never contends with WiFi/HTTP timing either.
     xTaskCreatePinnedToCore(pitch_task, "pitch_task", 4096, NULL, 5, NULL, 1);
-#endif
 }
