@@ -64,7 +64,8 @@ esp_err_t state_handler(httpd_req_t *req) {
         "\"PitchKp\":%f,\n"
         "\"PitchKi\":%f,\n"
         "\"PitchKd\":%f,\n"
-        "\"trigger\":%s\n"
+        "\"trigger\":%s,\n"
+        "\"auto_fire\":%s\n"
         "}",
       Kp,
       Ki,
@@ -81,7 +82,8 @@ esp_err_t state_handler(httpd_req_t *req) {
       PitchKp,
       PitchKi,
       PitchKd,
-      trigger ? "true" : "false");
+      trigger ? "true" : "false",
+      auto_fire ? "true" : "false");
     httpd_resp_set_type(req, "text/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
@@ -105,6 +107,10 @@ void process_query_param(const char *param, const char *value)
         bool enable = eq("true", value) || eq("1", value);
         ESP_LOGI("REST_HANDLER", "trigger %s", enable ? "true" : "false");
         set_trigger(enable);
+    }
+    else if (eq("auto_fire", param)) {
+        auto_fire = eq("true", value) || eq("1", value);
+        ESP_LOGI("REST_HANDLER", "auto_fire %s", auto_fire ? "true" : "false");
     }
     // ===== Controller Tuning =====
     else

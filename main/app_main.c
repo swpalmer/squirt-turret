@@ -46,6 +46,8 @@ volatile bool pitchCalibrated = false;
 volatile bool pitchHomingFailed = false;
 // Squirt gun fire button, set via the /api/control?trigger= REST param.
 volatile bool trigger = false;
+// Arms auto_fire_task, set via the /api/control?auto_fire= REST param.
+volatile bool auto_fire = false;
 
 // For PID controller
 // These worked well for a 1:1 gear ratio
@@ -94,6 +96,12 @@ volatile float PitchKd = 0.2;
 
 // GPIO for squirt gun trigger
 #define TRIGGER_SWITCH_GPIO 23
+
+// How long auto_fire_task fires the trigger for once both axes settle.
+#define AUTO_FIRE_DURATION_US (5 * 1000 * 1000)
+// auto_fire_task just watches motorEnable/pitchMotorEnable, not the
+// time-critical FOC loop, so a slow poll is fine here.
+#define AUTO_FIRE_POLL_PERIOD_MS 20
 
 #define FOC_MCPWM_TIMER_RESOLUTION_HZ 10000000 // 10MHz, 1 tick = 0.1us
 #define FOC_MCPWM_PERIOD              1000     // 1000 * 0.1us = 100us, 10KHz
@@ -767,6 +775,47 @@ void pitch_task(void *arg)
     vTaskDelete(NULL);
 }
 
+// Fires the trigger for AUTO_FIRE_DURATION_US once both axes have settled on
+// their target, while armed via auto_fire (set over HTTP -- see
+// http-server.c -- e.g. by an external targeting computer).
+//
+// "Settled" is read off motorEnable/pitchMotorEnable rather than recomputing
+// the position error here -- both already go false only once foc_task/
+// pitch_task's own thermal-idle check finds the axis within
+// DRIVE_DISABLE_ERROR_DEG of target (see the "Thermal idle" blocks there).
+// This also means pitch never reads as settled if homing failed, since
+// pitch_task exits before its loop ever clears pitchMotorEnable.
+void auto_fire_task(void *arg)
+{
+    bool firing = false;
+    int64_t fire_end_us = 0;
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(AUTO_FIRE_POLL_PERIOD_MS));
+
+        if (!auto_fire) {
+            if (firing) {
+                firing = false;
+                set_trigger(false);
+            }
+            continue;
+        }
+
+        if (firing) {
+            if (esp_timer_get_time() >= fire_end_us) {
+                firing = false;
+                set_trigger(false);
+            }
+        } else if (!motorEnable && !pitchMotorEnable) {
+            firing = true;
+            fire_end_us = esp_timer_get_time() + AUTO_FIRE_DURATION_US;
+            set_trigger(true);
+        } else if (trigger) {
+            set_trigger(false);
+        }
+    }
+}
+
 // Main entry point
 // ================
 void app_main(void)
@@ -805,10 +854,10 @@ void app_main(void)
     ESP_LOGI(TAG, "Connecting to WiFi...");
     wifi_connect(AP_NAME, AP_PASSWORD);
 
-    // TODO: auto-fire task
-    // This task will activate the TRIGGER_SWITCH_GPIO
-    // when both pitch and azymuth are in range and auto-fire is armed (true)
-    // auto_fire will be set via http interface by an external targeting computer
+    // Watches motorEnable/pitchMotorEnable and fires the trigger when armed
+    // and settled -- stays on core 0 alongside WiFi/HTTP since it's just
+    // polling state, not time-critical.
+    xTaskCreatePinnedToCore(auto_fire_task, "auto_fire_task", 4096, NULL, 5, NULL, 0);
 
     // FOC computation and PWM adjustment run in their own task, pinned to core 1.
     xTaskCreatePinnedToCore(foc_task, "foc_task", 4096, NULL, 5, NULL, 1);

@@ -12,6 +12,7 @@ extern volatile bool pitchCalibrated;
 extern volatile bool pitchHomingFailed;
 extern volatile bool trigger;
 void set_trigger(bool enable);
+extern volatile bool auto_fire;
 // For a PID controller
 extern volatile float Kp;
 extern volatile float Ki;
