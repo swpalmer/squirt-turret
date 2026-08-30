@@ -44,6 +44,8 @@ volatile bool pitchCalibrated = false;
 // True if homing hit its safety travel cutoff without finding the limit
 // switch -- pitch stays disabled rather than jogging indefinitely.
 volatile bool pitchHomingFailed = false;
+// Squirt gun fire button, set via the /api/control?trigger= REST param.
+volatile bool trigger = false;
 
 // For PID controller
 // These worked well for a 1:1 gear ratio
@@ -189,6 +191,13 @@ void bsp_bridge_driver_enable(int en_gpio, bool enable)
 {
     ESP_LOGI(TAG, "%s MOSFET gate (gpio %d)", enable ? "Enable" : "Disable", en_gpio);
     gpio_set_level(en_gpio, enable);
+}
+
+void set_trigger(bool enable)
+{
+    ESP_LOGI(TAG, "%s trigger (gpio %d)", enable ? "Enable" : "Disable", TRIGGER_SWITCH_GPIO);
+    trigger = enable;
+    gpio_set_level(TRIGGER_SWITCH_GPIO, enable);
 }
 
 bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)

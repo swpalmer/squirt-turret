@@ -63,7 +63,8 @@ esp_err_t state_handler(httpd_req_t *req) {
         "\"pitchHomingFailed\":%s,\n"
         "\"PitchKp\":%f,\n"
         "\"PitchKi\":%f,\n"
-        "\"PitchKd\":%f\n"
+        "\"PitchKd\":%f,\n"
+        "\"trigger\":%s\n"
         "}",
       Kp,
       Ki,
@@ -79,7 +80,8 @@ esp_err_t state_handler(httpd_req_t *req) {
       pitchHomingFailed ? "true" : "false",
       PitchKp,
       PitchKi,
-      PitchKd);
+      PitchKd,
+      trigger ? "true" : "false");
     httpd_resp_set_type(req, "text/json");
     httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
     free(buf);
@@ -97,6 +99,12 @@ void process_query_param(const char *param, const char *value)
             ESP_LOGI("REST_HANDLER", "Drive");
             // TODO: Set velocity and steering angle
         }
+    }
+    // ===== Trigger =====
+    else if (eq("trigger", param)) {
+        bool enable = eq("true", value) || eq("1", value);
+        ESP_LOGI("REST_HANDLER", "trigger %s", enable ? "true" : "false");
+        set_trigger(enable);
     }
     // ===== Controller Tuning =====
     else
