@@ -4,6 +4,8 @@ const Kp_slider = document.getElementById("Kp");
 const Ki_slider = document.getElementById("Ki");
 const Kd_slider = document.getElementById("Kd");
 const pitch_slider = document.getElementById("pitch");
+const auto_fire_checkbox = document.getElementById("auto_fire");
+const triggerButton = document.getElementById("triggerButton");
 const PitchKp_slider = document.getElementById("PitchKp");
 const PitchKi_slider = document.getElementById("PitchKi");
 const PitchKd_slider = document.getElementById("PitchKd");
@@ -41,6 +43,7 @@ function updateState(data) {
 
 	pitchActualValueDisplay.innerHTML = `${Math.round(data.pitchActual)}&deg;`;
 	pitch_slider.disabled = !data.pitchCalibrated;
+	auto_fire_checkbox.checked = data.auto_fire;
 	if (data.pitchHomingFailed) {
 		pitchStatus.textContent = "Homing failed — limit switch never tripped";
 	} else if (!data.pitchCalibrated) {
@@ -98,6 +101,46 @@ pitch_slider.oninput = updateFunction;
 PitchKp_slider.oninput = updateFunction;
 PitchKi_slider.oninput = updateFunction;
 PitchKd_slider.oninput = updateFunction;
+auto_fire_checkbox.oninput = updateFunction;
+
+// ----- Trigger button: fires while held, releases as soon as the pointer/key
+// lets go. Not debounced (unlike the sliders above) since a delay here would
+// mean lag on press and the trigger staying engaged briefly after release.
+function setTrigger(active) {
+	updateValueOnServer("trigger", active);
+}
+
+triggerButton.addEventListener("pointerdown", (e) => {
+	triggerButton.setPointerCapture(e.pointerId);
+	setTrigger(true);
+});
+
+function releaseTrigger(e) {
+	setTrigger(false);
+	try {
+		triggerButton.releasePointerCapture(e.pointerId);
+	} catch (err) {
+		// pointer capture may already be released, nothing to do
+	}
+}
+triggerButton.addEventListener("pointerup", releaseTrigger);
+triggerButton.addEventListener("pointercancel", releaseTrigger);
+
+triggerButton.addEventListener("keydown", (e) => {
+	if (e.key !== "Enter" && e.key !== " ") return;
+	e.preventDefault();
+	if (e.repeat) return;
+	setTrigger(true);
+});
+triggerButton.addEventListener("keyup", (e) => {
+	if (e.key !== "Enter" && e.key !== " ") return;
+	e.preventDefault();
+	setTrigger(false);
+});
+
+// Fail-safe: if the page/tab loses focus while the trigger is held (e.g.
+// alt-tab mid-press), release it rather than leaving it latched on.
+window.addEventListener("blur", () => setTrigger(false));
 
 // ----- Advanced (PID tuning) section, hidden by default -----
 const advancedToggle = document.getElementById("advancedToggle");

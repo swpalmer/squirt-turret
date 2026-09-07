@@ -147,3 +147,23 @@ h2 {
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 	z-index: 1;
 }
+
+.fire-button {
+	width: 100%;
+	margin-top: 8px;
+	padding: 14px 0;
+	font-size: 1rem;
+	font-weight: bold;
+	color: white;
+	background: #e63946;
+	border: none;
+	border-radius: 8px;
+	cursor: pointer;
+	touch-action: none;
+	user-select: none;
+	transition: background 0.1s ease-in-out;
+}
+
+.fire-button:active {
+	background: #a4212c;
+}

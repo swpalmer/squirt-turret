@@ -128,14 +128,20 @@ volatile float PitchKd = 0.2;
 #define AS5600_POLL_PERIOD_MS 2
 
 float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
-#define DRV1_FOC_WAVE_AMPL    150  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
+// Capped at 40 (down from 150) rather than the motors' full draw -- the 4S
+// pack this stands in for uses cells that are actually ~1000mAh despite
+// their advertised capacity, so current draw stays conservative until better
+// cells are in. Revisit once the pack is upgraded.
+#define DRV1_FOC_WAVE_AMPL    40  // Wave amplitude, Use up-down timer mode, max value should be (FOC_MCPWM_PERIOD/2)
 // Floor amplitude used when torque_offset is ~0 (settled, or barely
 // correcting). The d-axis voltage drives winding current regardless of lead
 // angle, so holding at full DRV1_FOC_WAVE_AMPL burns full current for
 // whatever torque is actually needed -- scaling amplitude down with
 // |torque_offset| (see foc_task) cuts that waste for small corrections while
 // still ramping back up to full amplitude for large moves.
-#define MIN_FOC_WAVE_AMPL     40
+// Same current-budget reasoning as DRV1_FOC_WAVE_AMPL above -- capped at 15
+// (down from 40) until the battery pack is upgraded.
+#define MIN_FOC_WAVE_AMPL     15
 #define POLE_PAIRS 7
 
 // Motor shaft revolutions per one revolution of the shaft the AS5600 actually
@@ -165,7 +171,7 @@ float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 // current until it trips. PITCH_HOMING_DIRECTION is the sign of that jog in
 // electrical degrees -- flip it if homing is observed driving away from the
 // switch instead of toward it.
-#define PITCH_HOMING_DIRECTION -1.0f
+#define PITCH_HOMING_DIRECTION 1.0f
 #define PITCH_HOMING_STEP_DEG_PER_TICK 0.5f
 #define PITCH_HOMING_WAVE_AMPL MIN_FOC_WAVE_AMPL
 // Safety cutoff for homing, independent of PITCH_MAX_DEG -- sized to the
