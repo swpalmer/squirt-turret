@@ -1,6 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/iqmath: ^1.11.0
+  espressif/mdns: '*'
   ## Required IDF version
   idf:
     version: '>=5.0'

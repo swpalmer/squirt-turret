@@ -5,7 +5,7 @@ idf_component_register(
          INCLUDE_DIRS "svpwm" "foc"
     PRIV_REQUIRES esp_driver_mcpwm esp_driver_gpio
          esp_wifi nvs_flash esp_http_server
-         esp_driver_i2c esp_timer
+         esp_driver_i2c esp_timer mdns
 )
 
 # Note: you must have a partition named the first argument (here it's "fs")

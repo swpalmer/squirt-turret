@@ -7,11 +7,13 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "mdns.h"
 #include "http-server.h"
 
 #define TAG "WiFi"
 
 #define WIFI_TX_POWER_20DBM 84
+#define DEVICE_HOSTNAME "turret"
 
 static esp_netif_t *sta_netif = NULL;
 
@@ -82,6 +84,7 @@ void wifi_init() {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     sta_netif = esp_netif_create_default_wifi_sta();
+    ESP_ERROR_CHECK(esp_netif_set_hostname(sta_netif, DEVICE_HOSTNAME));
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
@@ -93,6 +96,10 @@ void wifi_init() {
     ESP_ERROR_CHECK(esp_wifi_start());
 
     ESP_ERROR_CHECK(esp_wifi_set_max_tx_power(WIFI_TX_POWER_20DBM));
+
+    ESP_ERROR_CHECK(mdns_init());
+    ESP_ERROR_CHECK(mdns_hostname_set(DEVICE_HOSTNAME));
+    ESP_ERROR_CHECK(mdns_instance_name_set("Squirt Gun Turret"));
 }
 
 void wifi_connect(const char *ssid, const char *password) {
@@ -115,6 +122,7 @@ void wifi_disconnect() {
 }
 
 void app_wifi_deinit() {
+    mdns_free();
     ESP_ERROR_CHECK(esp_wifi_stop());
     ESP_ERROR_CHECK(esp_wifi_deinit());
     ESP_ERROR_CHECK(esp_event_loop_delete_default());
