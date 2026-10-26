@@ -141,7 +141,7 @@ float foc_wave_freq = 50.0;         // 50Hz 3 phase AC wave
 // still ramping back up to full amplitude for large moves.
 // Same current-budget reasoning as DRV1_FOC_WAVE_AMPL above -- capped at 15
 // (down from 40) until the battery pack is upgraded.
-#define MIN_FOC_WAVE_AMPL     15
+#define MIN_FOC_WAVE_AMPL     15 // increase if pitch adjustment too slow
 #define POLE_PAIRS 7
 
 // Motor shaft revolutions per one revolution of the shaft the AS5600 actually
@@ -211,7 +211,9 @@ void set_trigger(bool enable)
 {
     ESP_LOGI(TAG, "%s trigger (gpio %d)", enable ? "Enable" : "Disable", TRIGGER_SWITCH_GPIO);
     trigger = enable;
-    gpio_set_level(TRIGGER_SWITCH_GPIO, enable);
+    // workaround for counterfit MOSFET requires a 2N2222 transistor to drive the gate
+    // which inverts the logic. So use !enable.
+    gpio_set_level(TRIGGER_SWITCH_GPIO, !enable);
 }
 
 bool inverter_update_cb(mcpwm_timer_handle_t timer, const mcpwm_timer_event_data_t *edata, void *user_ctx)
@@ -793,7 +795,8 @@ void pitch_task(void *arg)
 // pitch_task exits before its loop ever clears pitchMotorEnable.
 void auto_fire_task(void *arg)
 {
-    bool firing = false;
+    // initialized to true so the loop deliberately turns it off
+    bool firing = true;
     int64_t fire_end_us = 0;
 
     while (true) {
@@ -826,8 +829,10 @@ void auto_fire_task(void *arg)
 // ================
 void app_main(void)
 {
-    ESP_LOGI(TAG, "Hello FOC");
+    ESP_LOGI(TAG, "Turret initializing...");
 
+    // this way for active high logic
+    #if false
     // Do this first so trigger isn't held for long when starting
     // Output to control "fire button"
     gpio_config_t trigger_switch_config = {
@@ -835,7 +840,21 @@ void app_main(void)
         .pin_bit_mask = 1ULL << TRIGGER_SWITCH_GPIO,
     };
     ESP_ERROR_CHECK(gpio_config(&trigger_switch_config));
-
+    #else // this for active low
+    // needed due to NPN driving MOSFET inverting logic (need a better MOSFET, not  a counterfeit)
+    // Pre-set the output level register to HIGH so it drives HIGH the instant it becomes an output
+    gpio_set_level(TRIGGER_SWITCH_GPIO, 1);
+    gpio_config_t trigger_switch_config = {
+        .pin_bit_mask = 1ULL << TRIGGER_SWITCH_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,     // Pull up immediately
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ESP_ERROR_CHECK(gpio_config(&trigger_switch_config));
+    // Explicitly confirm HIGH state
+    gpio_set_level(TRIGGER_SWITCH_GPIO, 1);
+    #endif
 
     esp_err_t ret = start_filesystem();
     if (ret != ESP_OK) {
